@@ -19,6 +19,26 @@ Verbose reads the `.jsonl` session files that Claude Code stores locally and pre
 - **Go 1.23+**
 - **Claude Code** — verbose reads session data from `~/.claude/projects/`
 
+### Installing Go
+
+**macOS** (Homebrew):
+```bash
+brew install go
+```
+
+**Windows** (winget):
+```powershell
+winget install -e --id GoLang.Go
+```
+
+**Linux** (apt):
+```bash
+sudo apt update
+sudo apt install golang-go
+```
+
+You can verify your installation with `go version`.
+
 ## Install
 
 ### From source
@@ -31,8 +51,14 @@ go build -o verbose .
 
 Then move the binary somewhere on your `PATH`:
 
+**macOS / Linux:**
 ```bash
 mv verbose /usr/local/bin/
+```
+
+**Windows (PowerShell):**
+```powershell
+move verbose.exe $env:GOPATH\bin\
 ```
 
 ### With `go install`
