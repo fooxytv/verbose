@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -162,6 +163,134 @@ func (s *Store) GetSession(id string) *Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.sessions[id]
+}
+
+// GetProjectInfo returns aggregated project information for a given project directory.
+func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	proj := &ProjectInfo{
+		ProjectDir: projectDir,
+	}
+
+	editCounts := make(map[string]int)
+	var encodedDir string
+
+	for _, sess := range s.sessions {
+		info := sess.Info
+		if info.ProjectDir != projectDir {
+			continue
+		}
+
+		proj.TotalSessions++
+		proj.TotalToolCalls += info.ToolCallCount
+		proj.TotalUserPrompts += info.UserPrompts
+		proj.TotalErrors += info.Errors
+		proj.TotalInputTokens += info.InputTokens
+		proj.TotalOutputTokens += info.OutputTokens
+		proj.TotalCacheReadTokens += info.CacheReadTokens
+		proj.TotalCacheWriteTokens += info.CacheWriteTokens
+		proj.TotalCostUSD += info.CostUSD
+
+		if proj.FirstSession.IsZero() || info.StartTime.Before(proj.FirstSession) {
+			proj.FirstSession = info.StartTime
+		}
+		if info.LastUpdate.After(proj.LastSession) {
+			proj.LastSession = info.LastUpdate
+		}
+
+		if proj.ProjectName == "" {
+			proj.ProjectName = info.ProjectName
+		}
+		if encodedDir == "" && info.FilePath != "" {
+			encodedDir = filepath.Base(filepath.Dir(info.FilePath))
+		}
+
+		// Count file edits
+		for _, fp := range info.FilesWritten {
+			editCounts[fp]++
+		}
+		for _, fp := range info.FilesCreated {
+			editCounts[fp]++
+		}
+
+		proj.Sessions = append(proj.Sessions, info)
+	}
+
+	if proj.TotalSessions == 0 {
+		return nil
+	}
+
+	proj.EncodedDir = encodedDir
+
+	// Sort sessions by LastUpdate descending
+	sort.Slice(proj.Sessions, func(i, j int) bool {
+		return proj.Sessions[i].LastUpdate.After(proj.Sessions[j].LastUpdate)
+	})
+
+	// Build MostEditedFiles sorted desc by count
+	for fp, count := range editCounts {
+		proj.MostEditedFiles = append(proj.MostEditedFiles, FileEditCount{Path: fp, Count: count})
+	}
+	sort.Slice(proj.MostEditedFiles, func(i, j int) bool {
+		return proj.MostEditedFiles[i].Count > proj.MostEditedFiles[j].Count
+	})
+	if len(proj.MostEditedFiles) > 10 {
+		proj.MostEditedFiles = proj.MostEditedFiles[:10]
+	}
+
+	// Read MEMORY.md
+	if encodedDir != "" {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			memPath := filepath.Join(homeDir, ".claude", "projects", encodedDir, "memory", "MEMORY.md")
+			data, err := os.ReadFile(memPath)
+			if err == nil {
+				proj.Memory = string(data)
+			}
+		}
+	}
+
+	return proj
+}
+
+// GetSessionTodos reads todo items for a session from ~/.claude/todos/.
+func (s *Store) GetSessionTodos(sessionID string) []TodoItem {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	todosDir := filepath.Join(homeDir, ".claude", "todos")
+	entries, err := os.ReadDir(todosDir)
+	if err != nil {
+		return nil
+	}
+
+	var todos []TodoItem
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, sessionID) || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(todosDir, name))
+		if err != nil {
+			continue
+		}
+
+		var items []TodoItem
+		if err := json.Unmarshal(data, &items); err != nil {
+			continue
+		}
+		todos = append(todos, items...)
+	}
+
+	return todos
 }
 
 // Close cleans up the file watcher.

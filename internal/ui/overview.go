@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"verbose/internal/session"
+	"github.com/fooxytv/verbose/internal/session"
 )
 
 // renderSessionOverview renders the detailed overview panel for a session.
-func renderSessionOverview(sess *session.Session, scroll int, width, height int) string {
+func renderSessionOverview(sess *session.Session, todos []session.TodoItem, hasProjectMemory bool, scroll int, width, height int) string {
 	// Build all lines first, then apply scroll window
 	var lines []string
 
@@ -66,6 +66,24 @@ func renderSessionOverview(sess *session.Session, scroll int, width, height int)
 	}
 	lines = append(lines, "")
 
+	// Todos section
+	if len(todos) > 0 {
+		lines = append(lines, sectionHeader(fmt.Sprintf("Todos (%d)", len(todos))))
+		for _, t := range todos {
+			var icon string
+			switch t.Status {
+			case "completed":
+				icon = userStyle.Render("[x]")
+			case "in_progress":
+				icon = toolUseStyle.Render("[~]")
+			default:
+				icon = dimStyle.Render("[ ]")
+			}
+			lines = append(lines, fmt.Sprintf("    %s %s", icon, normalStyle.Render(t.Subject)))
+		}
+		lines = append(lines, "")
+	}
+
 	// Files read
 	if len(info.FilesRead) > 0 {
 		lines = append(lines, sectionHeader(fmt.Sprintf("Files Read (%d)", len(info.FilesRead))))
@@ -98,6 +116,9 @@ func renderSessionOverview(sess *session.Session, scroll int, width, height int)
 
 	lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 60))))
 	lines = append(lines, dimStyle.Render("  Press ")+keyStyle.Render("enter")+dimStyle.Render(" or ")+keyStyle.Render("t")+dimStyle.Render(" to view event timeline"))
+	if hasProjectMemory {
+		lines = append(lines, dimStyle.Render("  Press ")+keyStyle.Render("p")+dimStyle.Render(" to view project memory and stats"))
+	}
 
 	// Apply scroll window
 	visibleHeight := height - 3 // leave room for help bar

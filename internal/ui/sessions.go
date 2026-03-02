@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"verbose/internal/session"
+	"github.com/fooxytv/verbose/internal/session"
 )
 
 // renderSessionsList renders the sessions list view.

@@ -88,6 +88,8 @@ func ParseSessionFile(path string) (*Session, error) {
 			}
 		case "user":
 			// Skip compact summary user messages from the first pass
+		case "queue-operation", "file-history-snapshot":
+			// Low-value metadata — skip entirely
 		}
 	}
 
@@ -120,7 +122,58 @@ func ParseSessionFile(path string) (*Session, error) {
 					CompactPreTokens: preTokens,
 					CompactTrigger:   trigger,
 				})
+			} else if entry.Subtype == "turn_duration" {
+				sess.Events = append(sess.Events, Event{
+					Type:           EventTurnDuration,
+					Timestamp:      ts,
+					UUID:           entry.UUID,
+					TurnDurationMs: entry.DurationMs,
+				})
 			}
+
+		case "progress":
+			if len(entry.Data) > 0 {
+				var pd rawProgressData
+				if err := json.Unmarshal(entry.Data, &pd); err == nil {
+					switch pd.Type {
+					case "agent_progress", "waiting_for_task":
+						desc := pd.TaskDescription
+						if desc == "" {
+							desc = pd.Prompt
+						}
+						if len(desc) > 120 {
+							desc = desc[:117] + "..."
+						}
+						sess.Events = append(sess.Events, Event{
+							Type:             EventAgentProgress,
+							Timestamp:        ts,
+							UUID:             entry.UUID,
+							AgentID:          pd.AgentID,
+							AgentDescription: desc,
+						})
+					case "hook_progress":
+						sess.Events = append(sess.Events, Event{
+							Type:      EventHookProgress,
+							Timestamp: ts,
+							UUID:      entry.UUID,
+							HookEvent: pd.HookEvent,
+							HookName:  pd.HookName,
+						})
+					case "bash_progress":
+						if strings.TrimSpace(pd.Output) != "" || pd.ElapsedTimeSec > 0 {
+							sess.Events = append(sess.Events, Event{
+								Type:           EventBashProgress,
+								Timestamp:      ts,
+								UUID:           entry.UUID,
+								BashElapsedSec: pd.ElapsedTimeSec,
+							})
+						}
+					}
+				}
+			}
+
+		case "queue-operation", "file-history-snapshot":
+			// Low-value metadata — skip
 
 		case "user":
 			if entry.Message == nil {

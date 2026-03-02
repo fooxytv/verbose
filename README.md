@@ -16,58 +16,41 @@ Verbose reads the `.jsonl` session files that Claude Code stores locally and pre
 
 ## Requirements
 
-- **Go 1.23+**
 - **Claude Code** — verbose reads session data from `~/.claude/projects/`
-
-### Installing Go
-
-**macOS** (Homebrew):
-```bash
-brew install go
-```
-
-**Windows** (winget):
-```powershell
-winget install -e --id GoLang.Go
-```
-
-**Linux** (apt):
-```bash
-sudo apt update
-sudo apt install golang-go
-```
-
-You can verify your installation with `go version`.
 
 ## Install
 
+### Download a release (recommended)
+
+Grab the latest pre-built binary for your platform from the
+[Releases page](https://github.com/fooxytv/verbose/releases).
+
+Unzip it and move the binary somewhere on your PATH:
+
+**macOS / Linux:**
+```bash
+sudo mv verbose /usr/local/bin/
+```
+
+**Windows:** move `verbose.exe` to a directory on your PATH, or add its location to your PATH.
+
+### With `go install`
+
+Requires Go 1.23+.
+
+```bash
+go install github.com/fooxytv/verbose@latest
+```
+
 ### From source
+
+Requires Go 1.23+.
 
 ```bash
 git clone https://github.com/fooxytv/verbose.git
 cd verbose
 go build -o verbose .
 ```
-
-Then move the binary somewhere on your `PATH`:
-
-**macOS / Linux:**
-```bash
-mv verbose /usr/local/bin/
-```
-
-**Windows (PowerShell):**
-```powershell
-move verbose.exe $env:GOPATH\bin\
-```
-
-### With `go install`
-
-```bash
-go install github.com/fooxytv/verbose@latest
-```
-
-> Note: the module is currently named `verbose` locally. `go install` from the remote will work once the module path in `go.mod` matches the GitHub repo path.
 
 ## Usage
 

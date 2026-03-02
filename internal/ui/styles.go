@@ -83,6 +83,10 @@ var (
 	systemStyle = lipgloss.NewStyle().
 			Foreground(colorYellow)
 
+	agentStyle = lipgloss.NewStyle().
+			Foreground(colorPurple).
+			Bold(true)
+
 	// Help bar
 	helpStyle = lipgloss.NewStyle().
 			Foreground(colorTextMuted).

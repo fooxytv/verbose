@@ -1,4 +1,4 @@
-module verbose
+module github.com/fooxytv/verbose
 
 go 1.23
 

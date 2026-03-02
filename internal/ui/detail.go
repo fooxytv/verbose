@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"verbose/internal/session"
+	"github.com/fooxytv/verbose/internal/session"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -158,6 +158,27 @@ func formatEventLine(e session.Event, maxWidth int) string {
 		}
 		return fmt.Sprintf("%s  %s  %s", tsStr, systemStyle.Render("⟳ compact"), dimStyle.Render(info))
 
+	case session.EventAgentProgress:
+		desc := truncate(e.AgentDescription, maxWidth-30)
+		id := e.AgentID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		return fmt.Sprintf("%s  %s  %s %s", tsStr, agentStyle.Render("⊞ agent "), mutedStyle.Render(id), dimStyle.Render(desc))
+
+	case session.EventHookProgress:
+		name := e.HookName
+		if name == "" {
+			name = e.HookEvent
+		}
+		return fmt.Sprintf("%s  %s  %s", tsStr, dimStyle.Render("⚡ hook  "), mutedStyle.Render(name))
+
+	case session.EventBashProgress:
+		return fmt.Sprintf("%s  %s  %s", tsStr, dimStyle.Render("… bash  "), mutedStyle.Render(fmt.Sprintf("%ds", e.BashElapsedSec)))
+
+	case session.EventTurnDuration:
+		return fmt.Sprintf("%s  %s  %s", tsStr, dimStyle.Render("⏱ turn  "), mutedStyle.Render(fmt.Sprintf("%dms", e.TurnDurationMs)))
+
 	default:
 		return fmt.Sprintf("%s  %s", tsStr, dimStyle.Render("?"))
 	}
@@ -225,6 +246,27 @@ func formatEventLineSelected(e session.Event, maxWidth int) string {
 		}
 		return fmt.Sprintf("%s  %s  %s", tsStr, sel(systemStyle).Render("⟳ compact"), sel(dimStyle).Render(info))
 
+	case session.EventAgentProgress:
+		desc := truncate(e.AgentDescription, maxWidth-30)
+		id := e.AgentID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		return fmt.Sprintf("%s  %s  %s %s", tsStr, sel(agentStyle).Render("⊞ agent "), sel(mutedStyle).Render(id), sel(dimStyle).Render(desc))
+
+	case session.EventHookProgress:
+		name := e.HookName
+		if name == "" {
+			name = e.HookEvent
+		}
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(dimStyle).Render("⚡ hook  "), sel(mutedStyle).Render(name))
+
+	case session.EventBashProgress:
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(dimStyle).Render("… bash  "), sel(mutedStyle).Render(fmt.Sprintf("%ds", e.BashElapsedSec)))
+
+	case session.EventTurnDuration:
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(dimStyle).Render("⏱ turn  "), sel(mutedStyle).Render(fmt.Sprintf("%dms", e.TurnDurationMs)))
+
 	default:
 		return fmt.Sprintf("%s  %s", tsStr, sel(dimStyle).Render("?"))
 	}
@@ -281,7 +323,12 @@ func formatToolSummary(tool string, input map[string]interface{}) string {
 			return fmt.Sprintf(`"%s" %s`, p, path)
 		}
 	case "Task":
-		if desc, ok := input["description"].(string); ok {
+		desc, _ := input["description"].(string)
+		agentType, _ := input["subagent_type"].(string)
+		if agentType != "" && desc != "" {
+			return fmt.Sprintf("[%s] %s", agentType, desc)
+		}
+		if desc != "" {
 			return desc
 		}
 	case "TaskCreate":
@@ -304,6 +351,33 @@ func formatToolSummary(tool string, input map[string]interface{}) string {
 	case "Skill":
 		if s, ok := input["skill"].(string); ok {
 			return s
+		}
+	case "EnterPlanMode":
+		return "entering plan mode"
+	case "ExitPlanMode":
+		return "plan ready for approval"
+	case "AskUserQuestion":
+		if qs, ok := input["questions"].([]interface{}); ok && len(qs) > 0 {
+			if q, ok := qs[0].(map[string]interface{}); ok {
+				if text, ok := q["question"].(string); ok {
+					return text
+				}
+			}
+		}
+		return "asking user"
+	case "TaskList":
+		return "listing tasks"
+	case "TaskGet":
+		if id, ok := input["taskId"].(string); ok {
+			return "#" + id
+		}
+	case "NotebookEdit":
+		if fp, ok := input["notebook_path"].(string); ok {
+			return fp
+		}
+	case "TaskStop":
+		if id, ok := input["task_id"].(string); ok {
+			return "stop #" + id
 		}
 	}
 
@@ -388,6 +462,42 @@ func renderEventDetail(e session.Event, scroll int, width, height int) string {
 		lines = append(lines, "")
 		lines = append(lines, "  "+dimStyle.Render("Claude summarised the conversation to free up context window space."))
 		lines = append(lines, "  "+dimStyle.Render("Events before this point are from the pre-compaction conversation."))
+
+	case session.EventAgentProgress:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Agent Progress — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		if e.AgentID != "" {
+			lines = append(lines, fieldLine("Agent ID", e.AgentID))
+		}
+		if e.AgentDescription != "" {
+			lines = append(lines, "")
+			lines = append(lines, "  "+dimStyle.Render("Description:"))
+			lines = append(lines, wrapLines(e.AgentDescription, width-4, "  ")...)
+		}
+
+	case session.EventHookProgress:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Hook — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		if e.HookEvent != "" {
+			lines = append(lines, fieldLine("Event", e.HookEvent))
+		}
+		if e.HookName != "" {
+			lines = append(lines, fieldLine("Hook", e.HookName))
+		}
+
+	case session.EventBashProgress:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Bash Progress — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		lines = append(lines, fieldLine("Elapsed", fmt.Sprintf("%ds", e.BashElapsedSec)))
+
+	case session.EventTurnDuration:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Turn Duration — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		lines = append(lines, fieldLine("Duration", fmt.Sprintf("%dms", e.TurnDurationMs)))
 	}
 
 	// Token info footer

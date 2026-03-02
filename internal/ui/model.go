@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 
-	"verbose/internal/session"
+	"github.com/fooxytv/verbose/internal/session"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -15,6 +15,7 @@ const (
 	viewDetail            // event timeline (default when opening a session)
 	viewOverview          // session summary (opt-in via "s")
 	viewEvent             // single event drill-down
+	viewProject           // project-level view
 )
 
 // sessionsUpdatedMsg signals that the session store has new data.
@@ -43,18 +44,29 @@ type Model struct {
 	// Auto-follow: scroll to bottom on updates
 	autoFollow bool
 
+	// Project view
+	selectedProject *session.ProjectInfo
+	projectScroll   int
+	projectCursor   int // selected session within project view (tab/shift-tab)
+
+	// Session todos
+	sessionTodos []session.TodoItem
+
 	width  int
 	height int
 
 	// Optional project filter
 	projectFilter string
+
+	version string
 }
 
 // NewModel creates a new TUI model.
-func NewModel(store *session.Store, projectFilter string) Model {
+func NewModel(store *session.Store, projectFilter, version string) Model {
 	return Model{
 		store:         store,
 		projectFilter: projectFilter,
+		version:       version,
 	}
 }
 
@@ -89,6 +101,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailCursor = max(0, len(m.selectedSession.Events)-1)
 		}
 		return m, m.watchForUpdates
+
+	case resumeStartedMsg:
+		// Session was opened in a new tab — nothing to do, TUI stays active
+		return m, nil
+
+	case resumeDoneMsg:
+		// In-place resume finished — TUI resumes automatically via tea.ExecProcess
+		return m, nil
 	}
 
 	return m, nil
@@ -109,6 +129,8 @@ func (m Model) View() string {
 			{"↑/↓", "navigate"},
 			{"→/enter/space", "open"},
 			{"s", "summary"},
+			{"p", "project"},
+			{"c", "continue"},
 			{"r", "refresh"},
 			{"q", "quit"},
 		})
@@ -126,17 +148,25 @@ func (m Model) View() string {
 			{"→/enter/space", "expand"},
 			{"←", "back"},
 			{"s", "summary"},
+			{"p", "project"},
+			{"c", "continue"},
 			{"f", followLabel},
 			{"q", "quit"},
 		})
 
 	case viewOverview:
 		if m.selectedSession != nil {
-			content = renderSessionOverview(m.selectedSession, m.overviewScroll, m.width, m.height)
+			hasMemory := false
+			if m.selectedSession != nil {
+				proj := m.store.GetProjectInfo(m.selectedSession.Info.ProjectDir)
+				hasMemory = proj != nil && proj.Memory != ""
+			}
+			content = renderSessionOverview(m.selectedSession, m.sessionTodos, hasMemory, m.overviewScroll, m.width, m.height)
 		}
 		help = renderHelp([]helpKey{
 			{"↑/↓", "scroll"},
 			{"←/esc", "back"},
+			{"p", "project"},
 			{"q", "quit"},
 		})
 
@@ -149,9 +179,23 @@ func (m Model) View() string {
 			{"←", "back"},
 			{"q", "quit"},
 		})
+
+	case viewProject:
+		if m.selectedProject != nil {
+			content = renderProjectView(m.selectedProject, m.projectScroll, m.projectCursor, m.width, m.height)
+		}
+		help = renderHelp([]helpKey{
+			{"↑/↓", "scroll"},
+			{"tab", "select session"},
+			{"enter", "open"},
+			{"c", "continue"},
+			{"←/esc", "back"},
+			{"q", "quit"},
+		})
 	}
 
-	return content + "\n" + help
+	versionTag := mutedStyle.Render("  v" + m.version)
+	return content + "\n" + help + versionTag
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -186,6 +230,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = viewDetail
 			m.selectedEvent = nil
 			m.eventScroll = 0
+		case viewProject:
+			m.mode = viewSessions
+			m.selectedProject = nil
+			m.projectScroll = 0
 		}
 
 	case "j", "down":
@@ -202,6 +250,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case viewEvent:
 			m.eventScroll++
+		case viewProject:
+			m.projectScroll++
 		}
 
 	case "k", "up":
@@ -223,6 +273,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.eventScroll > 0 {
 				m.eventScroll--
 			}
+		case viewProject:
+			if m.projectScroll > 0 {
+				m.projectScroll--
+			}
 		}
 
 	case "g", "home":
@@ -235,6 +289,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.overviewScroll = 0
 		case viewEvent:
 			m.eventScroll = 0
+		case viewProject:
+			m.projectScroll = 0
 		}
 
 	case "G", "end":
@@ -247,6 +303,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.selectedSession != nil && len(m.selectedSession.Events) > 0 {
 				m.detailCursor = len(m.selectedSession.Events) - 1
 			}
+		case viewProject:
+			m.projectScroll = 99999 // will be clamped by renderer
 		}
 
 	case "enter", "right":
@@ -270,6 +328,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.eventScroll = 0
 				m.mode = viewEvent
 			}
+		case viewProject:
+			if m.selectedProject != nil && m.projectCursor < len(m.selectedProject.Sessions) {
+				info := m.selectedProject.Sessions[m.projectCursor]
+				sess := m.store.GetSession(info.ID)
+				if sess != nil {
+					m.selectedSession = sess
+					m.detailCursor = max(0, len(sess.Events)-1)
+					m.autoFollow = true
+					m.mode = viewDetail
+				}
+			}
 		}
 
 	case "s":
@@ -281,15 +350,67 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				sess := m.store.GetSession(info.ID)
 				if sess != nil {
 					m.selectedSession = sess
+					m.sessionTodos = m.store.GetSessionTodos(info.ID)
 					m.overviewScroll = 0
 					m.mode = viewOverview
 				}
 			}
 		case viewDetail:
 			if m.selectedSession != nil {
+				m.sessionTodos = m.store.GetSessionTodos(m.selectedSession.Info.ID)
 				m.overviewScroll = 0
 				m.mode = viewOverview
 			}
+		}
+
+	case "p":
+		// Open project view
+		switch m.mode {
+		case viewSessions:
+			if m.cursor < len(m.sessions) {
+				info := m.sessions[m.cursor]
+				proj := m.store.GetProjectInfo(info.ProjectDir)
+				if proj != nil {
+					m.selectedProject = proj
+					m.projectScroll = 0
+					m.projectCursor = 0
+					m.mode = viewProject
+				}
+			}
+		case viewDetail, viewOverview:
+			if m.selectedSession != nil {
+				proj := m.store.GetProjectInfo(m.selectedSession.Info.ProjectDir)
+				if proj != nil {
+					m.selectedProject = proj
+					m.projectScroll = 0
+					m.projectCursor = 0
+					m.mode = viewProject
+				}
+			}
+		}
+
+	case "c":
+		// Continue/resume session in a new terminal tab
+		var info *session.SessionInfo
+		switch m.mode {
+		case viewSessions:
+			if m.cursor < len(m.sessions) {
+				s := m.sessions[m.cursor]
+				info = &s
+			}
+		case viewDetail, viewOverview:
+			if m.selectedSession != nil {
+				s := m.selectedSession.Info
+				info = &s
+			}
+		case viewProject:
+			if m.selectedProject != nil && m.projectCursor < len(m.selectedProject.Sessions) {
+				s := m.selectedProject.Sessions[m.projectCursor]
+				info = &s
+			}
+		}
+		if info != nil {
+			return m, resumeSessionCmd(info.ID, info.CWD)
 		}
 
 	case "f":
@@ -303,6 +424,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.refreshSessions()
 
+	case "tab":
+		if m.mode == viewProject && m.selectedProject != nil && len(m.selectedProject.Sessions) > 0 {
+			m.projectCursor = (m.projectCursor + 1) % len(m.selectedProject.Sessions)
+		}
+
+	case "shift+tab":
+		if m.mode == viewProject && m.selectedProject != nil && len(m.selectedProject.Sessions) > 0 {
+			m.projectCursor = (m.projectCursor - 1 + len(m.selectedProject.Sessions)) % len(m.selectedProject.Sessions)
+		}
+
 	case "shift+up", "pgup":
 		pageSize := m.pageSize()
 		switch m.mode {
@@ -315,6 +446,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.overviewScroll = max(0, m.overviewScroll-pageSize)
 		case viewEvent:
 			m.eventScroll = max(0, m.eventScroll-pageSize)
+		case viewProject:
+			m.projectScroll = max(0, m.projectScroll-pageSize)
 		}
 
 	case "shift+down", "pgdown":
@@ -332,6 +465,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.overviewScroll += pageSize
 		case viewEvent:
 			m.eventScroll += pageSize
+		case viewProject:
+			m.projectScroll += pageSize
 		}
 	}
 
@@ -359,6 +494,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if m.eventScroll > 0 {
 				m.eventScroll--
 			}
+		case viewProject:
+			if m.projectScroll > 0 {
+				m.projectScroll--
+			}
 		}
 
 	case tea.MouseButtonWheelDown:
@@ -375,6 +514,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.overviewScroll++
 		case viewEvent:
 			m.eventScroll++
+		case viewProject:
+			m.projectScroll++
 		}
 	}
 	return m, nil
