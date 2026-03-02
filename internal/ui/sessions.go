@@ -72,7 +72,9 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 func formatSessionLine(s session.SessionInfo, width int) string {
 	// Status indicator
 	status := "●"
-	if s.IsAgent {
+	if s.Source == "opencode" {
+		status = "◈"
+	} else if s.IsAgent {
 		status = "◦"
 	}
 

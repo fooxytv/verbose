@@ -31,9 +31,10 @@ type SessionInfo struct {
 	BashCommands  int
 	Errors        int
 
-	IsAgent bool // agent-* files are subagent sessions
+	IsAgent bool   // agent-* files are subagent sessions
 	Model   string
 	CWD     string
+	Source  string // "claude" or "opencode"
 }
 
 // Session is a fully parsed session with all events.

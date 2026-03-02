@@ -23,6 +23,7 @@ func main() {
 	}
 
 	project := flag.String("project", "", "filter to a specific project name")
+	opencode := flag.String("opencode", "", "path to an OpenCode database (.opencode/opencode.db)")
 	flag.Parse()
 
 	store, err := session.NewStore()
@@ -31,6 +32,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	if *opencode != "" {
+		store.AddOpenCodeDB(*opencode)
+	}
 
 	// Initial scan of all sessions
 	if err := store.Scan(); err != nil {
