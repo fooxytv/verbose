@@ -13,7 +13,11 @@ func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height 
 
 	// Header
 	lines = append(lines, headerStyle.Render(fmt.Sprintf(" Project: %s", proj.ProjectName)))
-	lines = append(lines, "  "+dimStyle.Render(proj.ProjectDir))
+	dirLabel := proj.CWD
+	if dirLabel == "" {
+		dirLabel = proj.ProjectDir
+	}
+	lines = append(lines, "  "+dimStyle.Render(dirLabel))
 	lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
 	lines = append(lines, "")
 
@@ -49,18 +53,39 @@ func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height 
 
 	lines = append(lines, fieldLine("Tool Calls", fmt.Sprintf("%d", proj.TotalToolCalls)))
 	lines = append(lines, fieldLine("User Prompts", fmt.Sprintf("%d", proj.TotalUserPrompts)))
+	lines = append(lines, fieldLine("Code Churn", fmt.Sprintf("%s  %s",
+		diffAddStyle.Render(fmt.Sprintf("+%d", proj.TotalLinesAdded)),
+		diffRemoveStyle.Render(fmt.Sprintf("-%d", proj.TotalLinesRemoved)))))
+	if proj.TotalSubagentCalls > 0 {
+		lines = append(lines, fieldLine("Subagents", agentStyle.Render(fmt.Sprintf("%d dispatched", proj.TotalSubagentCalls))))
+	}
 	if proj.TotalErrors > 0 {
-		lines = append(lines, fieldLine("Errors", toolErrorStyle.Render(fmt.Sprintf("%d", proj.TotalErrors))))
+		lines = append(lines, fieldLine("Failed Ops", toolErrorStyle.Render(fmt.Sprintf("%d", proj.TotalErrors))))
+	}
+	if proj.TotalInterruptions > 0 {
+		lines = append(lines, fieldLine("Interrupted", toolErrorStyle.Render(fmt.Sprintf("%d", proj.TotalInterruptions))))
+	}
+	if proj.TotalDenials > 0 {
+		lines = append(lines, fieldLine("Denied by User", toolErrorStyle.Render(fmt.Sprintf("%d", proj.TotalDenials))))
 	}
 	lines = append(lines, "")
+
+	// Per-tool breakdown across the whole project
+	if len(proj.ToolCounts) > 0 {
+		lines = append(lines, sectionHeader("Operations by Tool"))
+		lines = append(lines, renderToolBreakdown(proj.ToolCounts, min(width-24, 40))...)
+		lines = append(lines, "")
+	}
 
 	// Most-edited files
 	if len(proj.MostEditedFiles) > 0 {
 		lines = append(lines, sectionHeader("Most-Edited Files"))
 		for _, f := range proj.MostEditedFiles {
-			lines = append(lines, fmt.Sprintf("    %s  %s",
-				toolUseStyle.Render(fmt.Sprintf("%dx", f.Count)),
-				normalStyle.Render(f.Path)))
+			lines = append(lines, fmt.Sprintf("    %s %s %s  %s",
+				toolUseStyle.Render(fmt.Sprintf("%3dx", f.Count)),
+				diffAddStyle.Render(fmt.Sprintf("%+6d", f.LinesAdded)),
+				diffRemoveStyle.Render(fmt.Sprintf("%-6d", -f.LinesRemoved)),
+				normalStyle.Render(shortPath(f.Path, proj.CWD))))
 		}
 		lines = append(lines, "")
 	}
@@ -70,10 +95,7 @@ func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height 
 	if proj.Memory != "" {
 		lines = append(lines, "")
 		for _, l := range strings.Split(proj.Memory, "\n") {
-			if len(l) > width-4 {
-				l = l[:width-4]
-			}
-			lines = append(lines, "  "+normalStyle.Render(l))
+			lines = append(lines, "  "+normalStyle.Render(truncateRunes(l, width-4)))
 		}
 	} else {
 		lines = append(lines, "  "+dimStyle.Render("No project memory found."))

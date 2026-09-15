@@ -10,21 +10,33 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// renderSessionDetail renders the timeline view for a single session.
-func renderSessionDetail(sess *session.Session, cursor int, width, height int) string {
+// renderSessionDetail renders the timeline view for a single session. visible
+// holds the indices of the events passing the active filter and search, in
+// timeline order; cursor indexes into that list rather than into sess.Events.
+func renderSessionDetail(sess *session.Session, visible []int, cursor int, width, height int, status string) string {
 	var b strings.Builder
 
 	info := sess.Info
 	totalTokens := info.InputTokens + info.OutputTokens + info.CacheReadTokens + info.CacheWriteTokens
 
 	header := headerStyle.Render(fmt.Sprintf(" %s > %s  Timeline", info.ProjectName, shortID(info.ID)))
-	stats := mutedStyle.Render(fmt.Sprintf(
-		" %s | %s | tools: %d | events: %d",
+	statParts := []string{
 		tokenStyle.Render(formatTokens(totalTokens)),
 		costStyle.Render(fmt.Sprintf("$%.4f", info.CostUSD)),
-		info.ToolCallCount,
-		info.EventCount,
-	))
+		fmt.Sprintf("tools: %d", info.ToolCallCount),
+		fmt.Sprintf("events: %d", info.EventCount),
+	}
+	if info.LinesAdded > 0 || info.LinesRemoved > 0 {
+		statParts = append(statParts, diffAddStyle.Render(fmt.Sprintf("+%d", info.LinesAdded))+
+			" "+diffRemoveStyle.Render(fmt.Sprintf("-%d", info.LinesRemoved)))
+	}
+	if info.Errors > 0 {
+		statParts = append(statParts, toolErrorStyle.Render(fmt.Sprintf("failed: %d", info.Errors)))
+	}
+	if info.SubagentCalls > 0 {
+		statParts = append(statParts, agentStyle.Render(fmt.Sprintf("subagents: %d", info.SubagentCalls)))
+	}
+	stats := mutedStyle.Render(" " + strings.Join(statParts, " | "))
 	b.WriteString(header)
 	b.WriteString(stats)
 	b.WriteString("\n")
@@ -49,17 +61,25 @@ func renderSessionDetail(sess *session.Session, cursor int, width, height int) s
 	b.WriteString(mutedStyle.Render(strings.Repeat("─", min(width, 100))))
 	b.WriteString("\n")
 
-	events := sess.Events
-	if len(events) == 0 {
-		b.WriteString(dimStyle.Render("  No events in this session."))
-		return b.String()
-	}
-
-	// Calculate visible range
 	headerLines := 3
 	if len(fileParts) > 0 {
 		headerLines = 4
 	}
+	if status != "" {
+		b.WriteString("  " + searchStyle.Render(status))
+		b.WriteString("\n")
+		headerLines++
+	}
+
+	if len(sess.Events) == 0 {
+		b.WriteString(dimStyle.Render("  No events in this session."))
+		return b.String()
+	}
+	if len(visible) == 0 {
+		b.WriteString(dimStyle.Render("  Nothing matches the active filter or search."))
+		return b.String()
+	}
+
 	listHeight := height - headerLines - 2
 	if listHeight < 1 {
 		listHeight = 1
@@ -69,35 +89,36 @@ func renderSessionDetail(sess *session.Session, cursor int, width, height int) s
 		start = cursor - listHeight + 1
 	}
 	end := start + listHeight
-	if end > len(events) {
-		end = len(events)
+	if end > len(visible) {
+		end = len(visible)
 	}
 
 	for i := start; i < end; i++ {
-		e := events[i]
+		e := sess.Events[visible[i]]
 		selected := i == cursor
 
 		if selected {
-			line := formatEventLineSelected(e, width-4)
+			line := formatEventLineSelected(e, width-5, info.CWD)
 			// Pad to full width with selection background
-			row := selBg.Render("▸ "+line) + selBg.Render(strings.Repeat(" ", max(0, width-visibleLen(line)-2)))
+			row := selBg.Render("▸") + sidechainMark(e, true) + selBg.Render(line) +
+				selBg.Render(strings.Repeat(" ", max(0, width-visibleLen(line)-2)))
 			b.WriteString(row)
 		} else {
-			line := formatEventLine(e, width-4)
-			b.WriteString("  " + line)
+			line := formatEventLine(e, width-5, info.CWD)
+			b.WriteString(" " + sidechainMark(e, false) + line)
 		}
 		b.WriteString("\n")
 	}
 
-	if len(events) > listHeight {
-		pct := float64(cursor+1) / float64(len(events)) * 100
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("\n  [%d/%d %.0f%%]", cursor+1, len(events), pct)))
+	if len(visible) > listHeight {
+		pct := float64(cursor+1) / float64(len(visible)) * 100
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("\n  [%d/%d %.0f%%]", cursor+1, len(visible), pct)))
 	}
 
 	return b.String()
 }
 
-func formatEventLine(e session.Event, maxWidth int) string {
+func formatEventLine(e session.Event, maxWidth int, cwd string) string {
 	ts := e.Timestamp.Format("15:04:05")
 	tsStr := mutedStyle.Render(ts)
 
@@ -107,33 +128,20 @@ func formatEventLine(e session.Event, maxWidth int) string {
 		return fmt.Sprintf("%s  %s  %s", tsStr, userStyle.Render("▶ user  "), dimStyle.Render(text))
 
 	case session.EventThinking:
-		text := truncate(firstLine(e.Thinking), maxWidth-25)
-		return fmt.Sprintf("%s  %s  %s", tsStr, thinkingStyle.Render("~ think "), dimStyle.Render(text))
+		return fmt.Sprintf("%s  %s  %s", tsStr, thinkingStyle.Render("~ think "),
+			mutedStyle.Render(thinkingSummary(e, maxWidth-25)))
 
 	case session.EventText:
 		text := truncate(firstLine(e.Text), maxWidth-20)
 		return fmt.Sprintf("%s  %s  %s", tsStr, textStyle.Render("◁ text  "), dimStyle.Render(text))
 
 	case session.EventToolUse:
-		name := fmt.Sprintf("▷ %-6s", e.ToolName)
-		summary := formatToolSummary(e.ToolName, e.ToolInput)
-		summary = truncate(summary, maxWidth-25)
+		name := toolColumn(e.ToolName)
+		summary := truncate(formatToolSummary(e.ToolName, e.ToolInput, cwd), maxWidth-40)
 		// Colour-code by operation type
-		nameStyle := toolUseStyle
-		summaryStyle := dimStyle
-		switch e.ToolName {
-		case "Edit":
-			nameStyle = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
-			summaryStyle = lipgloss.NewStyle().Foreground(colorYellow)
-		case "Write":
-			nameStyle = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
-			summaryStyle = lipgloss.NewStyle().Foreground(colorGreen)
-		case "Read":
-			nameStyle = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
-		case "Bash":
-			nameStyle = lipgloss.NewStyle().Foreground(colorOrange).Bold(true)
-		}
-		return fmt.Sprintf("%s  %s  %s", tsStr, nameStyle.Render(name), summaryStyle.Render(summary))
+		nameStyle, summaryStyle := toolStyles(e)
+		return fmt.Sprintf("%s  %s  %s%s", tsStr, nameStyle.Render(name),
+			summaryStyle.Render(summary), opOutcome(e, false))
 
 	case session.EventToolResult:
 		if e.IsError {
@@ -177,7 +185,20 @@ func formatEventLine(e session.Event, maxWidth int) string {
 		return fmt.Sprintf("%s  %s  %s", tsStr, dimStyle.Render("… bash  "), mutedStyle.Render(fmt.Sprintf("%ds", e.BashElapsedSec)))
 
 	case session.EventTurnDuration:
-		return fmt.Sprintf("%s  %s  %s", tsStr, dimStyle.Render("⏱ turn  "), mutedStyle.Render(fmt.Sprintf("%dms", e.TurnDurationMs)))
+		return fmt.Sprintf("%s  %s  %s", tsStr, dimStyle.Render("⏱ turn  "), mutedStyle.Render(formatDuration(e.TurnDurationMs)))
+
+	case session.EventToolDenied:
+		text := truncate(firstLine(e.UserFeedback), maxWidth-30)
+		return fmt.Sprintf("%s  %s  %s %s", tsStr, toolErrorStyle.Render("⊘ denied"),
+			mutedStyle.Render(e.DenialKind), dimStyle.Render(text))
+
+	case session.EventUserFileEdit:
+		return fmt.Sprintf("%s  %s  %s", tsStr, userStyle.Render("✍ you   "),
+			dimStyle.Render(truncate(shortPath(e.FilePath, cwd), maxWidth-25)))
+
+	case session.EventDiagnostics:
+		return fmt.Sprintf("%s  %s  %s", tsStr, toolErrorStyle.Render("⚠ diag  "),
+			dimStyle.Render(fmt.Sprintf("%s", summariseDiagnostics(e.Diagnostics))))
 
 	default:
 		return fmt.Sprintf("%s  %s", tsStr, dimStyle.Render("?"))
@@ -186,7 +207,7 @@ func formatEventLine(e session.Event, maxWidth int) string {
 
 // formatEventLineSelected renders the same event line but with background highlight.
 // Each styled segment gets the selection background added so colours are preserved.
-func formatEventLineSelected(e session.Event, maxWidth int) string {
+func formatEventLineSelected(e session.Event, maxWidth int, cwd string) string {
 	ts := e.Timestamp.Format("15:04:05")
 	bg := colorBgSelected
 	tsStr := lipgloss.NewStyle().Foreground(colorText).Background(bg).Render(ts)
@@ -201,32 +222,19 @@ func formatEventLineSelected(e session.Event, maxWidth int) string {
 		return fmt.Sprintf("%s  %s  %s", tsStr, sel(userStyle).Render("▶ user  "), sel(normalStyle).Render(text))
 
 	case session.EventThinking:
-		text := truncate(firstLine(e.Thinking), maxWidth-25)
-		return fmt.Sprintf("%s  %s  %s", tsStr, sel(thinkingStyle).Render("~ think "), sel(dimStyle).Render(text))
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(thinkingStyle).Render("~ think "),
+			sel(mutedStyle).Render(thinkingSummary(e, maxWidth-25)))
 
 	case session.EventText:
 		text := truncate(firstLine(e.Text), maxWidth-20)
 		return fmt.Sprintf("%s  %s  %s", tsStr, sel(textStyle).Render("◁ text  "), sel(normalStyle).Render(text))
 
 	case session.EventToolUse:
-		name := fmt.Sprintf("▷ %-6s", e.ToolName)
-		summary := formatToolSummary(e.ToolName, e.ToolInput)
-		summary = truncate(summary, maxWidth-25)
-		nameStyle := toolUseStyle
-		summaryStyle := dimStyle
-		switch e.ToolName {
-		case "Edit":
-			nameStyle = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
-			summaryStyle = lipgloss.NewStyle().Foreground(colorYellow)
-		case "Write":
-			nameStyle = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
-			summaryStyle = lipgloss.NewStyle().Foreground(colorGreen)
-		case "Read":
-			nameStyle = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
-		case "Bash":
-			nameStyle = lipgloss.NewStyle().Foreground(colorOrange).Bold(true)
-		}
-		return fmt.Sprintf("%s  %s  %s", tsStr, sel(nameStyle).Render(name), sel(summaryStyle).Render(summary))
+		name := toolColumn(e.ToolName)
+		summary := truncate(formatToolSummary(e.ToolName, e.ToolInput, cwd), maxWidth-40)
+		nameStyle, summaryStyle := toolStyles(e)
+		return fmt.Sprintf("%s  %s  %s%s", tsStr, sel(nameStyle).Render(name),
+			sel(summaryStyle).Render(summary), opOutcome(e, true))
 
 	case session.EventToolResult:
 		if e.IsError {
@@ -265,7 +273,20 @@ func formatEventLineSelected(e session.Event, maxWidth int) string {
 		return fmt.Sprintf("%s  %s  %s", tsStr, sel(dimStyle).Render("… bash  "), sel(mutedStyle).Render(fmt.Sprintf("%ds", e.BashElapsedSec)))
 
 	case session.EventTurnDuration:
-		return fmt.Sprintf("%s  %s  %s", tsStr, sel(dimStyle).Render("⏱ turn  "), sel(mutedStyle).Render(fmt.Sprintf("%dms", e.TurnDurationMs)))
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(dimStyle).Render("⏱ turn  "), sel(mutedStyle).Render(formatDuration(e.TurnDurationMs)))
+
+	case session.EventToolDenied:
+		text := truncate(firstLine(e.UserFeedback), maxWidth-30)
+		return fmt.Sprintf("%s  %s  %s %s", tsStr, sel(toolErrorStyle).Render("⊘ denied"),
+			sel(mutedStyle).Render(e.DenialKind), sel(dimStyle).Render(text))
+
+	case session.EventUserFileEdit:
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(userStyle).Render("✍ you   "),
+			sel(normalStyle).Render(truncate(shortPath(e.FilePath, cwd), maxWidth-25)))
+
+	case session.EventDiagnostics:
+		return fmt.Sprintf("%s  %s  %s", tsStr, sel(toolErrorStyle).Render("⚠ diag  "),
+			sel(dimStyle).Render(summariseDiagnostics(e.Diagnostics)))
 
 	default:
 		return fmt.Sprintf("%s  %s", tsStr, sel(dimStyle).Render("?"))
@@ -292,7 +313,7 @@ func visibleLen(s string) int {
 	return n
 }
 
-func formatToolSummary(tool string, input map[string]interface{}) string {
+func formatToolSummary(tool string, input map[string]interface{}, cwd string) string {
 	switch tool {
 	case "Bash":
 		if cmd, ok := input["command"].(string); ok {
@@ -300,15 +321,15 @@ func formatToolSummary(tool string, input map[string]interface{}) string {
 		}
 	case "Read":
 		if fp, ok := input["file_path"].(string); ok {
-			return fp
+			return shortPath(fp, cwd)
 		}
 	case "Write":
 		if fp, ok := input["file_path"].(string); ok {
-			return "→ " + fp
+			return "→ " + shortPath(fp, cwd)
 		}
 	case "Edit":
 		if fp, ok := input["file_path"].(string); ok {
-			return "✎ " + fp
+			return "✎ " + shortPath(fp, cwd)
 		}
 	case "Glob":
 		if p, ok := input["pattern"].(string); ok {
@@ -320,7 +341,7 @@ func formatToolSummary(tool string, input map[string]interface{}) string {
 			if path == "" {
 				path = "."
 			}
-			return fmt.Sprintf(`"%s" %s`, p, path)
+			return fmt.Sprintf(`"%s" %s`, p, shortPath(path, cwd))
 		}
 	case "Task":
 		desc, _ := input["description"].(string)
@@ -373,7 +394,7 @@ func formatToolSummary(tool string, input map[string]interface{}) string {
 		}
 	case "NotebookEdit":
 		if fp, ok := input["notebook_path"].(string); ok {
-			return fp
+			return shortPath(fp, cwd)
 		}
 	case "TaskStop":
 		if id, ok := input["task_id"].(string); ok {
@@ -403,7 +424,12 @@ func renderEventDetail(e session.Event, scroll int, width, height int) string {
 		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Thinking — %s", ts)))
 		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
 		lines = append(lines, "")
-		lines = append(lines, wrapLines(e.Thinking, width-4, "  ")...)
+		if strings.TrimSpace(e.Thinking) == "" {
+			lines = append(lines, "  "+dimStyle.Render("The agent reasoned at this point, but extended thinking is"))
+			lines = append(lines, "  "+dimStyle.Render("signed rather than stored — the transcript keeps no body text."))
+		} else {
+			lines = append(lines, wrapLines(e.Thinking, width-4, "  ")...)
+		}
 
 	case session.EventText:
 		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Response — %s", ts)))
@@ -416,9 +442,33 @@ func renderEventDetail(e session.Event, scroll int, width, height int) string {
 		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
 		lines = append(lines, "")
 
+		meta := []string{}
+		if e.DurationMs >= 0 {
+			meta = append(meta, "took "+formatDuration(e.DurationMs))
+		} else {
+			meta = append(meta, toolErrorStyle.Render("no result recorded"))
+		}
+		if e.LinesAdded > 0 || e.LinesRemoved > 0 {
+			meta = append(meta, fmt.Sprintf("%s %s",
+				diffAddStyle.Render(fmt.Sprintf("+%d", e.LinesAdded)),
+				diffRemoveStyle.Render(fmt.Sprintf("-%d", e.LinesRemoved))))
+		}
+		if e.IsSidechain {
+			meta = append(meta, agentStyle.Render("subagent"))
+		}
+		lines = append(lines, "  "+mutedStyle.Render(strings.Join(meta, "  ·  ")))
+		lines = append(lines, "")
+
 		// Special rendering for Edit tool — show as diff
 		if e.ToolName == "Edit" {
-			lines = append(lines, renderEditDiff(e.ToolInput, width)...)
+			if e.Result != nil && len(e.Result.StructuredPatch) > 0 {
+				lines = append(lines, "  "+dimStyle.Render("File: ")+
+					toolUseStyle.Render(shortPath(e.Result.FilePath, "")))
+				lines = append(lines, "")
+				lines = append(lines, renderPatch(e.Result.StructuredPatch, width)...)
+			} else {
+				lines = append(lines, renderEditDiff(e.ToolInput, width)...)
+			}
 		} else if e.ToolName == "Bash" {
 			if cmd, ok := e.ToolInput["command"].(string); ok {
 				lines = append(lines, "  "+dimStyle.Render("Command:"))
@@ -435,6 +485,19 @@ func renderEventDetail(e session.Event, scroll int, width, height int) string {
 			}
 		}
 
+		// The result is folded into the call, so show it on the same screen.
+		if e.Result != nil || e.ToolOutput != "" {
+			lines = append(lines, "")
+			lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+			label := " Result"
+			if e.IsError {
+				label = " Result (failed)"
+			}
+			lines = append(lines, headerLabelStyle.Render(label))
+			lines = append(lines, "")
+			lines = append(lines, renderToolResult(e, width)...)
+		}
+
 	case session.EventToolResult:
 		title := "Tool Result"
 		if e.IsError {
@@ -443,9 +506,7 @@ func renderEventDetail(e session.Event, scroll int, width, height int) string {
 		lines = append(lines, headerStyle.Render(fmt.Sprintf(" %s — %s", title, ts)))
 		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
 		lines = append(lines, "")
-		lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("Output (%s):", formatBytes(len(e.ToolOutput)))))
-		lines = append(lines, "")
-		lines = append(lines, wrapLines(e.ToolOutput, width-4, "  ")...)
+		lines = append(lines, renderToolResult(e, width)...)
 
 	case session.EventCompaction:
 		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Conversation Compacted — %s", ts)))
@@ -497,7 +558,43 @@ func renderEventDetail(e session.Event, scroll int, width, height int) string {
 		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Turn Duration — %s", ts)))
 		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
 		lines = append(lines, "")
-		lines = append(lines, fieldLine("Duration", fmt.Sprintf("%dms", e.TurnDurationMs)))
+		lines = append(lines, fieldLine("Duration", formatDuration(e.TurnDurationMs)))
+
+	case session.EventToolDenied:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Tool Call Denied — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		lines = append(lines, fieldLine("Kind", toolErrorStyle.Render(e.DenialKind)))
+		if e.UserFeedback != "" {
+			lines = append(lines, "")
+			lines = append(lines, "  "+dimStyle.Render("Feedback given to the agent:"))
+			lines = append(lines, wrapLines(e.UserFeedback, width-4, "  ")...)
+		}
+
+	case session.EventUserFileEdit:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" File Edited Outside Claude — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		lines = append(lines, fieldLine("File", userStyle.Render(e.FilePath)))
+		if e.Text != "" {
+			lines = append(lines, "")
+			lines = append(lines, "  "+dimStyle.Render("Snippet:"))
+			lines = append(lines, wrapLines(e.Text, width-4, "  ")...)
+		}
+
+	case session.EventDiagnostics:
+		lines = append(lines, headerStyle.Render(fmt.Sprintf(" Diagnostics — %s", ts)))
+		lines = append(lines, mutedStyle.Render(strings.Repeat("─", min(width, 100))))
+		lines = append(lines, "")
+		for _, d := range e.Diagnostics {
+			style := dimStyle
+			if strings.EqualFold(d.Severity, "error") {
+				style = toolErrorStyle
+			}
+			lines = append(lines, fmt.Sprintf("  %s %s",
+				style.Render(fmt.Sprintf("[%s]", d.Severity)), normalStyle.Render(d.Message)))
+			lines = append(lines, "      "+mutedStyle.Render(d.File))
+		}
 	}
 
 	// Token info footer
@@ -556,19 +653,13 @@ func renderEditDiff(input map[string]interface{}, width int) []string {
 		if oldStr != "" {
 			lines = append(lines, "  "+diffRemoveStyle.Render("--- removed"))
 			for _, l := range strings.Split(oldStr, "\n") {
-				if len(l) > maxW {
-					l = l[:maxW]
-				}
-				lines = append(lines, "  "+diffRemoveStyle.Render("- "+l))
+				lines = append(lines, "  "+diffRemoveStyle.Render("- "+truncateRunes(l, maxW)))
 			}
 		}
 		if newStr != "" {
 			lines = append(lines, "  "+diffAddStyle.Render("+++ added"))
 			for _, l := range strings.Split(newStr, "\n") {
-				if len(l) > maxW {
-					l = l[:maxW]
-				}
-				lines = append(lines, "  "+diffAddStyle.Render("+ "+l))
+				lines = append(lines, "  "+diffAddStyle.Render("+ "+truncateRunes(l, maxW)))
 			}
 		}
 	}
@@ -596,14 +687,30 @@ func firstLine(s string) string {
 	return s
 }
 
+// truncate cuts to a rune count, not a byte count. Paths, box-drawing glyphs and
+// any accented text are multi-byte, so slicing by byte both cut lines far short
+// of the terminal width and could split a rune in half.
 func truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = 40
 	}
-	if len(s) <= maxLen {
+	r := []rune(s)
+	if len(r) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	return string(r[:maxLen-1]) + "…"
+}
+
+// truncateRunes cuts to a rune count without appending an ellipsis.
+func truncateRunes(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxLen {
+		return s
+	}
+	return string(r[:maxLen])
 }
 
 func wrapLines(s string, maxWidth int, prefix string) []string {
@@ -619,10 +726,7 @@ func wrapLines(s string, maxWidth int, prefix string) []string {
 			result = append(result, prefix+mutedStyle.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
 			break
 		}
-		if len(line) > maxWidth {
-			line = line[:maxWidth]
-		}
-		result = append(result, prefix+line)
+		result = append(result, prefix+truncateRunes(line, maxWidth))
 	}
 	return result
 }
@@ -635,4 +739,221 @@ func formatBytes(n int) string {
 		return fmt.Sprintf("%.1f KB", float64(n)/1024)
 	}
 	return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+}
+
+// sidechainMark flags events that happened inside a subagent turn.
+func sidechainMark(e session.Event, selected bool) string {
+	if !e.IsSidechain {
+		return " "
+	}
+	if selected {
+		return lipgloss.NewStyle().Foreground(colorPurple).Background(colorBgSelected).Render("│")
+	}
+	return agentStyle.Render("│")
+}
+
+// opOutcome renders what a tool call produced. The result is folded into the
+// call event, so one row carries both the operation and how it went.
+func opOutcome(e session.Event, selected bool) string {
+	bg := func(base lipgloss.Style) lipgloss.Style {
+		if selected {
+			return base.Copy().Background(colorBgSelected)
+		}
+		return base
+	}
+
+	if e.IsError {
+		return bg(toolErrorStyle).Render("  ✗ " + truncate(firstLine(errorText(e)), 28))
+	}
+
+	parts := []string{}
+	switch {
+	case e.LinesAdded > 0 || e.LinesRemoved > 0:
+		parts = append(parts,
+			bg(diffAddStyle).Render(fmt.Sprintf("+%d", e.LinesAdded))+
+				bg(diffRemoveStyle).Render(fmt.Sprintf(" -%d", e.LinesRemoved)))
+	case len(e.ToolOutput) > 1024:
+		parts = append(parts, bg(mutedStyle).Render(formatBytes(len(e.ToolOutput))))
+	}
+	if e.DurationMs >= 1000 {
+		parts = append(parts, bg(mutedStyle).Render(formatDuration(e.DurationMs)))
+	}
+	if e.DurationMs < 0 && e.Type == session.EventToolUse {
+		parts = append(parts, bg(mutedStyle).Render("no result"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  " + strings.Join(parts, bg(mutedStyle).Render(" "))
+}
+
+// errorText prefers the structured failure record over the raw content block.
+func errorText(e session.Event) string {
+	if e.Result != nil {
+		if e.Result.Raw != "" {
+			return e.Result.Raw
+		}
+		if e.Result.Stderr != "" {
+			return e.Result.Stderr
+		}
+	}
+	return e.ToolOutput
+}
+
+func formatDuration(ms int) string {
+	switch {
+	case ms < 0:
+		return "—"
+	case ms < 1000:
+		return fmt.Sprintf("%dms", ms)
+	case ms < 60000:
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	default:
+		return fmt.Sprintf("%dm%ds", ms/60000, (ms%60000)/1000)
+	}
+}
+
+func summariseDiagnostics(diags []session.Diagnostic) string {
+	errs := 0
+	for _, d := range diags {
+		if strings.EqualFold(d.Severity, "error") {
+			errs++
+		}
+	}
+	if errs > 0 {
+		return fmt.Sprintf("%d diagnostics (%d errors)", len(diags), errs)
+	}
+	return fmt.Sprintf("%d diagnostics", len(diags))
+}
+
+// renderToolResult renders the structured record of a completed operation,
+// falling back to the raw text block when no structured form was recorded.
+func renderToolResult(e session.Event, width int) []string {
+	var lines []string
+	r := e.Result
+
+	if r == nil {
+		lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("Output (%s):", formatBytes(len(e.ToolOutput)))))
+		lines = append(lines, "")
+		return append(lines, wrapLines(e.ToolOutput, width-4, "  ")...)
+	}
+
+	if r.Raw != "" {
+		lines = append(lines, "  "+toolErrorStyle.Render("The operation failed:"))
+		lines = append(lines, "")
+		return append(lines, wrapLines(r.Raw, width-4, "  ")...)
+	}
+
+	// Edit / Write — show the diff Claude Code actually recorded, not the request.
+	if len(r.StructuredPatch) > 0 {
+		added, removed := r.Churn()
+		if r.FilePath != "" {
+			lines = append(lines, "  "+dimStyle.Render("File: ")+toolUseStyle.Render(r.FilePath))
+		}
+		lines = append(lines, "  "+diffAddStyle.Render(fmt.Sprintf("+%d", added))+" "+
+			diffRemoveStyle.Render(fmt.Sprintf("-%d", removed))+
+			mutedStyle.Render(fmt.Sprintf("  across %d hunk(s)", len(r.StructuredPatch))))
+		if r.UserModified {
+			lines = append(lines, "  "+systemStyle.Render("(the file had been modified by you since the agent last read it)"))
+		}
+		lines = append(lines, "")
+		lines = append(lines, renderPatch(r.StructuredPatch, width)...)
+		return lines
+	}
+
+	// Bash — stdout and stderr are recorded separately.
+	if r.Stdout != "" || r.Stderr != "" || r.Interrupted {
+		if r.Interrupted {
+			lines = append(lines, "  "+toolErrorStyle.Render("⊘ interrupted before completion"))
+			lines = append(lines, "")
+		}
+		if r.Stdout != "" {
+			lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("stdout (%s):", formatBytes(len(r.Stdout)))))
+			lines = append(lines, wrapLines(r.Stdout, width-4, "  ")...)
+		}
+		if r.Stderr != "" {
+			lines = append(lines, "")
+			lines = append(lines, "  "+toolErrorStyle.Render(fmt.Sprintf("stderr (%s):", formatBytes(len(r.Stderr)))))
+			for _, l := range wrapLines(r.Stderr, width-4, "  ") {
+				lines = append(lines, toolErrorStyle.Render(l))
+			}
+		}
+		return lines
+	}
+
+	// Read — report what slice of the file was pulled into context.
+	if r.File != nil {
+		lines = append(lines, "  "+dimStyle.Render("File: ")+toolUseStyle.Render(r.File.FilePath))
+		lines = append(lines, fieldLine("Lines Read", fmt.Sprintf("%d of %d (from line %d)",
+			r.File.NumLines, r.File.TotalLines, r.File.StartLine)))
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("Output (%s):", formatBytes(len(e.ToolOutput)))))
+	lines = append(lines, "")
+	return append(lines, wrapLines(e.ToolOutput, width-4, "  ")...)
+}
+
+// renderPatch colours a set of unified-diff hunks.
+func renderPatch(hunks []session.PatchHunk, width int) []string {
+	maxW := min(width-6, 160)
+	var lines []string
+	for _, h := range hunks {
+		lines = append(lines, "  "+systemStyle.Render(fmt.Sprintf("@@ -%d,%d +%d,%d @@",
+			h.OldStart, h.OldLines, h.NewStart, h.NewLines)))
+		for _, l := range h.Lines {
+			l = truncateRunes(l, maxW)
+			switch {
+			case strings.HasPrefix(l, "+"):
+				lines = append(lines, "  "+diffAddStyle.Render(l))
+			case strings.HasPrefix(l, "-"):
+				lines = append(lines, "  "+diffRemoveStyle.Render(l))
+			default:
+				lines = append(lines, "  "+dimStyle.Render(l))
+			}
+		}
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+// toolStyles colours a tool row by operation kind, with failures overriding.
+func toolStyles(e session.Event) (lipgloss.Style, lipgloss.Style) {
+	if e.IsError {
+		return toolErrorStyle, dimStyle
+	}
+	switch e.ToolName {
+	case "Edit", "MultiEdit", "NotebookEdit":
+		return lipgloss.NewStyle().Foreground(colorYellow).Bold(true),
+			lipgloss.NewStyle().Foreground(colorYellow)
+	case "Write":
+		return lipgloss.NewStyle().Foreground(colorGreen).Bold(true),
+			lipgloss.NewStyle().Foreground(colorGreen)
+	case "Read":
+		return lipgloss.NewStyle().Foreground(colorCyan).Bold(true), dimStyle
+	case "Bash":
+		return lipgloss.NewStyle().Foreground(colorOrange).Bold(true), dimStyle
+	case "Task":
+		return agentStyle.Copy().Bold(true), agentStyle
+	}
+	return toolUseStyle, dimStyle
+}
+
+// thinkingSummary describes a thinking step. Extended thinking is signed but not
+// retained in the transcript, so most of these have no body to show.
+func thinkingSummary(e session.Event, maxWidth int) string {
+	if strings.TrimSpace(e.Thinking) == "" {
+		return "(reasoning not retained in transcript)"
+	}
+	return truncate(firstLine(e.Thinking), maxWidth)
+}
+
+// toolColumn renders the tool name in a fixed-width column. Names longer than
+// the column are abbreviated rather than allowed to shift everything right.
+func toolColumn(name string) string {
+	const w = 7
+	if len([]rune(name)) > w {
+		name = truncate(name, w)
+	}
+	return fmt.Sprintf("▷ %-*s", w, name)
 }

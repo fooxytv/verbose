@@ -20,8 +20,8 @@ type Store struct {
 	watcher  *fsnotify.Watcher
 	updates  chan struct{} // signals that sessions have changed
 
-	ocDBs       map[string]time.Time // tracked OpenCode DBs: path → last mtime
-	ocExtraDBs  []string             // explicitly specified OpenCode DB paths
+	ocDBs      map[string]time.Time // tracked OpenCode DBs: path → last mtime
+	ocExtraDBs []string             // explicitly specified OpenCode DB paths
 }
 
 // NewStore creates a session store that scans ~/.claude/projects/.
@@ -275,7 +275,8 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 		ProjectDir: projectDir,
 	}
 
-	editCounts := make(map[string]int)
+	editCounts := make(map[string]*FileEditCount)
+	proj.ToolCounts = make(map[string]int)
 	var encodedDir string
 
 	for _, sess := range s.sessions {
@@ -293,6 +294,14 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 		proj.TotalCacheReadTokens += info.CacheReadTokens
 		proj.TotalCacheWriteTokens += info.CacheWriteTokens
 		proj.TotalCostUSD += info.CostUSD
+		proj.TotalLinesAdded += info.LinesAdded
+		proj.TotalLinesRemoved += info.LinesRemoved
+		proj.TotalSubagentCalls += info.SubagentCalls
+		proj.TotalDenials += info.Denials
+		proj.TotalInterruptions += info.Interruptions
+		for name, n := range info.ToolCounts {
+			proj.ToolCounts[name] += n
+		}
 
 		if proj.FirstSession.IsZero() || info.StartTime.Before(proj.FirstSession) {
 			proj.FirstSession = info.StartTime
@@ -304,16 +313,26 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 		if proj.ProjectName == "" {
 			proj.ProjectName = info.ProjectName
 		}
+		// ProjectDir is decoded from the on-disk directory name, which cannot
+		// distinguish path separators from hyphens. The CWD recorded in the
+		// transcript is the real path.
+		if proj.CWD == "" && info.CWD != "" {
+			proj.CWD = info.CWD
+		}
 		if encodedDir == "" && info.FilePath != "" {
 			encodedDir = filepath.Base(filepath.Dir(info.FilePath))
 		}
 
-		// Count file edits
-		for _, fp := range info.FilesWritten {
-			editCounts[fp]++
-		}
-		for _, fp := range info.FilesCreated {
-			editCounts[fp]++
+		// Count file edits, carrying line churn through from each session
+		for _, c := range info.FileChurns {
+			e, ok := editCounts[c.Path]
+			if !ok {
+				e = &FileEditCount{Path: c.Path}
+				editCounts[c.Path] = e
+			}
+			e.Count += c.Edits
+			e.LinesAdded += c.LinesAdded
+			e.LinesRemoved += c.LinesRemoved
 		}
 
 		proj.Sessions = append(proj.Sessions, info)
@@ -331,11 +350,15 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 	})
 
 	// Build MostEditedFiles sorted desc by count
-	for fp, count := range editCounts {
-		proj.MostEditedFiles = append(proj.MostEditedFiles, FileEditCount{Path: fp, Count: count})
+	for _, e := range editCounts {
+		proj.MostEditedFiles = append(proj.MostEditedFiles, *e)
 	}
 	sort.Slice(proj.MostEditedFiles, func(i, j int) bool {
-		return proj.MostEditedFiles[i].Count > proj.MostEditedFiles[j].Count
+		a, b := proj.MostEditedFiles[i], proj.MostEditedFiles[j]
+		if a.Count != b.Count {
+			return a.Count > b.Count
+		}
+		return a.LinesAdded+a.LinesRemoved > b.LinesAdded+b.LinesRemoved
 	})
 	if len(proj.MostEditedFiles) > 10 {
 		proj.MostEditedFiles = proj.MostEditedFiles[:10]

@@ -9,45 +9,100 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// resumeSessionCmd returns a tea.Cmd that resumes a session.
+// launchInTerminal opens a CLI command in the best available terminal.
 // Detection priority: tmux (split pane) > iTerm2 (new tab) > Terminal.app > in-place.
+func launchInTerminal(cli string, args []string, cwd string) tea.Cmd {
+	if os.Getenv("TMUX") != "" {
+		return launchInTmux(cli, args, cwd)
+	}
+	if os.Getenv("ITERM_SESSION_ID") != "" {
+		return launchInITermTab(cli, args, cwd)
+	}
+	if os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
+		return launchInTerminalApp(cli, args, cwd)
+	}
+	return launchInPlace(cli, args, cwd)
+}
+
+// resumeSessionCmd returns a tea.Cmd that resumes a session.
 func resumeSessionCmd(sessionID, cwd string) tea.Cmd {
-	// Determine CLI command and actual session ID
 	cli := "claude"
 	resumeID := sessionID
-	resumeArgs := []string{"--resume", resumeID}
 
 	if strings.HasPrefix(sessionID, "oc-") {
 		cli = "opencode"
 		resumeID = strings.TrimPrefix(sessionID, "oc-")
-		resumeArgs = []string{"--resume", resumeID}
 	}
 
-	// If inside tmux, split the current window — stays in context.
-	if os.Getenv("TMUX") != "" {
-		return resumeInTmux(cli, resumeArgs, sessionID, cwd)
-	}
-
-	// iTerm2 without tmux — open a new tab.
-	if os.Getenv("ITERM_SESSION_ID") != "" {
-		return resumeInITermTab(cli, resumeArgs, sessionID, cwd)
-	}
-
-	terminal := os.Getenv("TERM_PROGRAM")
-	if terminal == "Apple_Terminal" {
-		return resumeInTerminalApp(cli, resumeArgs, sessionID, cwd)
-	}
-
-	return resumeInPlace(cli, resumeArgs, sessionID, cwd)
+	return launchInTerminal(cli, []string{"--resume", resumeID}, cwd)
 }
 
-// resumeInITermTab opens a new iTerm2 tab and runs the resume command there.
-// Uses "write text" which types into the shell, so the tab stays open even if the CLI exits.
-func resumeInITermTab(cli string, resumeArgs []string, sessionID, cwd string) tea.Cmd {
+// newSessionCmd starts a fresh CLI session (no --resume) in the same CWD.
+func newSessionCmd(source, cwd string) tea.Cmd {
+	cli := "claude"
+	if source == "opencode" {
+		cli = "opencode"
+	}
+	return launchInTerminal(cli, nil, cwd)
+}
+
+// forkSessionCmd starts a new CLI session with the last prompt as the first message.
+func forkSessionCmd(source, cwd, lastPrompt string) tea.Cmd {
+	cli := "claude"
+	if source == "opencode" {
+		cli = "opencode"
+	}
+	prompt := "Continue from previous session:\n\n" + lastPrompt
+	return launchInTerminal(cli, []string{prompt}, cwd)
+}
+
+// yankPromptCmd copies text to clipboard using pbcopy.
+func yankPromptCmd(text string) tea.Cmd {
 	return func() tea.Msg {
-		shellCmd := fmt.Sprintf("%s %s", cli, strings.Join(resumeArgs, " "))
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		err := cmd.Run()
+		return yankDoneMsg{err: err}
+	}
+}
+
+// yankDoneMsg is sent when clipboard copy completes.
+type yankDoneMsg struct {
+	err error
+}
+
+// launchInTmux splits the current tmux window horizontally and runs the command.
+func launchInTmux(cli string, args []string, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		splitArgs := []string{"split-window", "-h"}
 		if cwd != "" {
-			shellCmd = fmt.Sprintf("cd %s && %s %s", shellQuote(cwd), cli, strings.Join(resumeArgs, " "))
+			splitArgs = append(splitArgs, "-c", cwd)
+		}
+		cmd := exec.Command("tmux", splitArgs...)
+		if err := cmd.Run(); err != nil {
+			return resumeStartedMsg{}
+		}
+
+		sendCmd := cli
+		if len(args) > 0 {
+			sendCmd = fmt.Sprintf("%s %s", cli, shellJoinArgs(args))
+		}
+		cmd = exec.Command("tmux", "send-keys", sendCmd, "Enter")
+		cmd.Run()
+
+		return resumeStartedMsg{newTab: true}
+	}
+}
+
+// launchInITermTab opens a new iTerm2 tab and runs the command.
+func launchInITermTab(cli string, args []string, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		shellCmd := cli
+		if len(args) > 0 {
+			shellCmd = fmt.Sprintf("%s %s", cli, shellJoinArgs(args))
+		}
+		if cwd != "" {
+			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(cwd), shellCmd)
 		}
 
 		script := fmt.Sprintf(`
@@ -63,39 +118,19 @@ end tell
 
 		cmd := exec.Command("osascript", "-e", script)
 		cmd.Run()
-		return resumeStartedMsg{sessionID: sessionID, newTab: true}
+		return resumeStartedMsg{newTab: true}
 	}
 }
 
-// resumeInTmux splits the current tmux window horizontally and runs the resume command.
-// Uses send-keys so the shell stays alive if the CLI exits.
-func resumeInTmux(cli string, resumeArgs []string, sessionID, cwd string) tea.Cmd {
+// launchInTerminalApp opens a new Terminal.app window and runs the command.
+func launchInTerminalApp(cli string, args []string, cwd string) tea.Cmd {
 	return func() tea.Msg {
-		// Split horizontally (side by side) — verbose stays on the left, CLI on the right
-		splitArgs := []string{"split-window", "-h"}
-		if cwd != "" {
-			splitArgs = append(splitArgs, "-c", cwd)
+		shellCmd := cli
+		if len(args) > 0 {
+			shellCmd = fmt.Sprintf("%s %s", cli, shellJoinArgs(args))
 		}
-		cmd := exec.Command("tmux", splitArgs...)
-		if err := cmd.Run(); err != nil {
-			return resumeStartedMsg{sessionID: sessionID}
-		}
-
-		// Send the command into the new pane
-		sendCmd := fmt.Sprintf("%s %s", cli, strings.Join(resumeArgs, " "))
-		cmd = exec.Command("tmux", "send-keys", sendCmd, "Enter")
-		cmd.Run()
-
-		return resumeStartedMsg{sessionID: sessionID, newTab: true}
-	}
-}
-
-// resumeInTerminalApp opens a new Terminal.app window and runs the command.
-func resumeInTerminalApp(cli string, resumeArgs []string, sessionID, cwd string) tea.Cmd {
-	return func() tea.Msg {
-		shellCmd := fmt.Sprintf("%s %s", cli, strings.Join(resumeArgs, " "))
 		if cwd != "" {
-			shellCmd = fmt.Sprintf("cd %s && %s %s", shellQuote(cwd), cli, strings.Join(resumeArgs, " "))
+			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(cwd), shellCmd)
 		}
 
 		script := fmt.Sprintf(`
@@ -107,13 +142,13 @@ end tell
 
 		cmd := exec.Command("osascript", "-e", script)
 		cmd.Run()
-		return resumeStartedMsg{sessionID: sessionID, newTab: true}
+		return resumeStartedMsg{newTab: true}
 	}
 }
 
-// resumeInPlace suspends the TUI and runs the resume command in the current terminal.
-func resumeInPlace(cli string, resumeArgs []string, sessionID, cwd string) tea.Cmd {
-	c := exec.Command(cli, resumeArgs...)
+// launchInPlace suspends the TUI and runs the command in the current terminal.
+func launchInPlace(cli string, args []string, cwd string) tea.Cmd {
+	c := exec.Command(cli, args...)
 	if cwd != "" {
 		c.Dir = cwd
 	}
@@ -122,13 +157,12 @@ func resumeInPlace(cli string, resumeArgs []string, sessionID, cwd string) tea.C
 	})
 }
 
-// resumeStartedMsg is sent when a session resume was launched in a new tab.
+// resumeStartedMsg is sent when a session was launched in a new tab/pane.
 type resumeStartedMsg struct {
-	sessionID string
-	newTab    bool
+	newTab bool
 }
 
-// resumeDoneMsg is sent when an in-place resume finishes and the TUI should restore.
+// resumeDoneMsg is sent when an in-place launch finishes and the TUI should restore.
 type resumeDoneMsg struct {
 	err error
 }
@@ -136,6 +170,15 @@ type resumeDoneMsg struct {
 // shellQuote wraps a string in single quotes for safe shell usage.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// shellJoinArgs joins args, quoting each one for safe shell usage.
+func shellJoinArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = shellQuote(a)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // appleScriptString returns a properly quoted AppleScript string literal.

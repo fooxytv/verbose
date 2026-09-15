@@ -18,11 +18,11 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 	b.WriteString("\n")
 
 	// Column headers
-	cols := mutedStyle.Render(fmt.Sprintf("  %-4s  %-18s  %-10s  %7s  %9s  %8s  %5s  %5s",
-		"", "PROJECT", "SESSION", "AGO", "TOKENS", "COST", "TOOLS", "EDITS"))
+	cols := mutedStyle.Render(fmt.Sprintf("  %-4s  %-18s  %-10s  %7s  %9s  %8s  %5s  %5s  %11s",
+		"", "PROJECT", "SESSION", "AGO", "TOKENS", "COST", "TOOLS", "EDITS", "CHURN"))
 	b.WriteString(cols)
 	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render(strings.Repeat("─", min(width, 90))))
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", min(width, 104))))
 	b.WriteString("\n")
 
 	if len(sessions) == 0 {
@@ -90,14 +90,21 @@ func formatSessionLine(s session.SessionInfo, width int) string {
 
 	project := s.ProjectName
 	if len(project) > 18 {
-		project = project[:15] + "..."
+		project = truncateRunes(project, 15) + "..."
 	}
 
 	toolStr := fmt.Sprintf("%d", s.ToolCallCount)
 	editStr := fmt.Sprintf("%d", len(s.FilesWritten)+len(s.FilesCreated))
 
-	return fmt.Sprintf("%-4s  %-18s  %-10s  %7s  %9s  %8s  %5s  %5s",
-		status, project, shortID, ago, tokenStr, costStr, toolStr, editStr)
+	churnStr := mutedStyle.Render(fmt.Sprintf("%11s", "—"))
+	if s.LinesAdded > 0 || s.LinesRemoved > 0 {
+		churnStr = fmt.Sprintf("%s %s",
+			diffAddStyle.Render(fmt.Sprintf("%+5d", s.LinesAdded)),
+			diffRemoveStyle.Render(fmt.Sprintf("%-5d", -s.LinesRemoved)))
+	}
+
+	return fmt.Sprintf("%-4s  %-18s  %-10s  %7s  %9s  %8s  %5s  %5s  %s",
+		status, project, shortID, ago, tokenStr, costStr, toolStr, editStr, churnStr)
 }
 
 func timeAgo(t time.Time) string {

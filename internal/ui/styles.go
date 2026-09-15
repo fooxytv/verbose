@@ -125,4 +125,19 @@ var (
 
 	diffContextStyle = lipgloss.NewStyle().
 				Foreground(colorTextDim)
+
+	// Status message (transient feedback)
+	statusStyle = lipgloss.NewStyle().
+			Foreground(colorGreen).
+			PaddingLeft(1)
+
+	// Active filter / search indicator on the timeline
+	searchStyle = lipgloss.NewStyle().
+			Foreground(colorPurple)
+
+	// Search input prompt
+	searchPromptStyle = lipgloss.NewStyle().
+				Foreground(colorBg).
+				Background(colorPurple).
+				Bold(true)
 )

@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -31,10 +32,24 @@ type SessionInfo struct {
 	BashCommands  int
 	Errors        int
 
-	IsAgent bool   // agent-* files are subagent sessions
-	Model   string
-	CWD     string
-	Source  string // "claude" or "opencode"
+	// Operation auditing
+	ToolCounts     map[string]int // tool name -> call count
+	LinesAdded     int
+	LinesRemoved   int
+	FileChurns     []FileChurn   // per-file edit/churn detail, sorted desc
+	SubagentCalls  int           // Task tool invocations
+	SubagentEvents int           // events recorded on a sidechain (subagent turns)
+	Interruptions  int           // operations the user or system aborted
+	Denials        int           // tool calls the user rejected
+	WebRequests    int           // WebFetch + WebSearch calls
+	SkillsUsed     []string      // distinct skills invoked
+	ActiveDuration time.Duration // sum of reported turn durations
+
+	IsAgent   bool // agent-* files are subagent sessions
+	Model     string
+	CWD       string
+	GitBranch string
+	Source    string // "claude" or "opencode"
 }
 
 // Session is a fully parsed session with all events.
@@ -58,6 +73,9 @@ const (
 	EventHookProgress  // Pre/post tool hooks
 	EventBashProgress  // Real-time bash output
 	EventTurnDuration  // System turn timing metadata
+	EventToolDenied    // User rejected a tool call
+	EventUserFileEdit  // User edited a file outside of Claude
+	EventDiagnostics   // IDE diagnostics attached to the conversation
 )
 
 // Event is a single thing that happened in a session.
@@ -76,13 +94,31 @@ type Event struct {
 	Thinking string
 
 	// EventToolUse
-	ToolName  string
-	ToolInput map[string]interface{}
-	ToolID    string
+	ToolName   string
+	ToolInput  map[string]interface{}
+	ToolID     string
+	DurationMs int // wall time until the matching tool result, -1 if unmatched
+
+	// Line churn attributed from the matching result's structured patch
+	LinesAdded   int
+	LinesRemoved int
 
 	// EventToolResult
 	ToolOutput string
 	IsError    bool
+	Result     *ToolResult // structured record of what the operation actually did
+	ResultUUID string      // transcript entry the result came from, when folded in
+
+	// EventToolDenied
+	DenialKind   string
+	UserFeedback string
+
+	// EventUserFileEdit / EventDiagnostics
+	FilePath    string
+	Diagnostics []Diagnostic
+
+	// Set on every event that occurred inside a subagent turn
+	IsSidechain bool
 
 	// EventCompaction
 	CompactPreTokens int
@@ -128,6 +164,79 @@ type rawEntry struct {
 	// Progress events and system metadata
 	Data       json.RawMessage `json:"data"`
 	DurationMs int             `json:"durationMs"`
+
+	// Structured record of a completed tool call. Usually an object, but a bare
+	// string when the operation failed (e.g. "Error: Exit code 127").
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+
+	IsSidechain    bool            `json:"isSidechain"`
+	ToolDenialKind string          `json:"toolDenialKind"`
+	UserFeedback   json.RawMessage `json:"userFeedback"`
+	Attachment     json.RawMessage `json:"attachment"`
+}
+
+// ToolResult is the decoded toolUseResult payload. Fields are populated
+// selectively depending on which tool produced it.
+type ToolResult struct {
+	// Bash
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	Interrupted bool   `json:"interrupted"`
+
+	// Edit / Write
+	FilePath     string `json:"filePath"`
+	OldString    string `json:"oldString"`
+	NewString    string `json:"newString"`
+	ReplaceAll   bool   `json:"replaceAll"`
+	UserModified bool   `json:"userModified"`
+
+	// Edit / Write — the real diff Claude Code recorded for the change
+	StructuredPatch []PatchHunk `json:"structuredPatch"`
+
+	// Read
+	File *ReadFile `json:"file"`
+
+	// Set when toolUseResult was a bare string rather than an object
+	Raw string `json:"-"`
+}
+
+// PatchHunk is one unified-diff hunk from a Edit or Write operation.
+type PatchHunk struct {
+	OldStart int      `json:"oldStart"`
+	OldLines int      `json:"oldLines"`
+	NewStart int      `json:"newStart"`
+	NewLines int      `json:"newLines"`
+	Lines    []string `json:"lines"`
+}
+
+// Churn counts the added and removed lines across all hunks.
+func (r *ToolResult) Churn() (added, removed int) {
+	for _, h := range r.StructuredPatch {
+		for _, l := range h.Lines {
+			switch {
+			case strings.HasPrefix(l, "+"):
+				added++
+			case strings.HasPrefix(l, "-"):
+				removed++
+			}
+		}
+	}
+	return added, removed
+}
+
+// ReadFile describes the file returned by a Read operation.
+type ReadFile struct {
+	FilePath   string `json:"filePath"`
+	NumLines   int    `json:"numLines"`
+	StartLine  int    `json:"startLine"`
+	TotalLines int    `json:"totalLines"`
+}
+
+// Diagnostic is a single IDE diagnostic surfaced in the transcript.
+type Diagnostic struct {
+	File     string
+	Severity string
+	Message  string
 }
 
 type rawCompactMetadata struct {
@@ -167,15 +276,19 @@ type ProjectInfo struct {
 	ProjectName string
 	ProjectDir  string
 	EncodedDir  string // raw dir name on disk
+	CWD         string // real working directory, from the sessions themselves
 
 	Memory string // MEMORY.md contents
 
 	// Aggregate stats
 	TotalSessions, TotalToolCalls, TotalUserPrompts, TotalErrors int
+	TotalLinesAdded, TotalLinesRemoved                           int
+	TotalSubagentCalls, TotalDenials, TotalInterruptions         int
+	ToolCounts                                                   map[string]int
 	TotalInputTokens, TotalOutputTokens                          int
 	TotalCacheReadTokens, TotalCacheWriteTokens                  int
-	TotalCostUSD                                                  float64
-	FirstSession, LastSession                                     time.Time
+	TotalCostUSD                                                 float64
+	FirstSession, LastSession                                    time.Time
 
 	MostEditedFiles []FileEditCount // sorted desc by count
 	Sessions        []SessionInfo   // sorted desc by LastUpdate
@@ -183,8 +296,18 @@ type ProjectInfo struct {
 
 // FileEditCount tracks how many times a file was edited across sessions.
 type FileEditCount struct {
-	Path  string
-	Count int
+	Path         string
+	Count        int
+	LinesAdded   int
+	LinesRemoved int
+}
+
+// FileChurn records how much a single file changed within one session.
+type FileChurn struct {
+	Path         string
+	Edits        int
+	LinesAdded   int
+	LinesRemoved int
 }
 
 // TodoItem represents a task/todo from ~/.claude/todos/.

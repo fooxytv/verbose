@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/fooxytv/verbose/internal/session"
 )
@@ -26,13 +27,20 @@ func renderSessionOverview(sess *session.Session, todos []session.TodoItem, hasP
 	lines = append(lines, fieldLine("Session ID", info.ID))
 	lines = append(lines, fieldLine("Project", info.ProjectDir))
 	lines = append(lines, fieldLine("Working Dir", info.CWD))
+	if info.GitBranch != "" {
+		lines = append(lines, fieldLine("Git Branch", toolUseStyle.Render(info.GitBranch)))
+	}
 	if info.Model != "" {
 		lines = append(lines, fieldLine("Model", info.Model))
 	}
 	lines = append(lines, fieldLine("Started", info.StartTime.Format("2006-01-02 15:04:05")))
 	lines = append(lines, fieldLine("Last Active", info.LastUpdate.Format("2006-01-02 15:04:05")))
 	duration := info.LastUpdate.Sub(info.StartTime)
-	lines = append(lines, fieldLine("Duration", duration.Round(1e9).String()))
+	lines = append(lines, fieldLine("Duration", duration.Round(time.Second).String()))
+	if info.ActiveDuration > 0 {
+		lines = append(lines, fieldLine("Active Time", info.ActiveDuration.Round(time.Second).String()+
+			dimStyle.Render(fmt.Sprintf("  (%.0f%% of elapsed)", activePercent(info.ActiveDuration, duration)))))
+	}
 	if info.IsAgent {
 		lines = append(lines, fieldLine("Type", systemStyle.Render("Subagent")))
 	}
@@ -59,12 +67,63 @@ func renderSessionOverview(sess *session.Session, todos []session.TodoItem, hasP
 	lines = append(lines, sectionHeader("Activity"))
 	lines = append(lines, fieldLine("User Prompts", fmt.Sprintf("%d", info.UserPrompts)))
 	lines = append(lines, fieldLine("Tool Calls", fmt.Sprintf("%d", info.ToolCallCount)))
-	lines = append(lines, fieldLine("Bash Commands", fmt.Sprintf("%d", info.BashCommands)))
 	lines = append(lines, fieldLine("Total Events", fmt.Sprintf("%d", info.EventCount)))
+	if info.SubagentCalls > 0 {
+		lines = append(lines, fieldLine("Subagents", agentStyle.Render(fmt.Sprintf("%d dispatched", info.SubagentCalls))))
+	}
+	if info.SubagentEvents > 0 {
+		lines = append(lines, fieldLine("  Subagent Ops", fmt.Sprintf("%d", info.SubagentEvents)))
+	}
+	if info.WebRequests > 0 {
+		lines = append(lines, fieldLine("Web Requests", fmt.Sprintf("%d", info.WebRequests)))
+	}
+	if len(info.SkillsUsed) > 0 {
+		lines = append(lines, fieldLine("Skills Used", strings.Join(info.SkillsUsed, ", ")))
+	}
 	if info.Errors > 0 {
-		lines = append(lines, fieldLine("Errors", toolErrorStyle.Render(fmt.Sprintf("%d", info.Errors))))
+		lines = append(lines, fieldLine("Failed Ops", toolErrorStyle.Render(fmt.Sprintf("%d", info.Errors))))
+	}
+	if info.Interruptions > 0 {
+		lines = append(lines, fieldLine("Interrupted", toolErrorStyle.Render(fmt.Sprintf("%d", info.Interruptions))))
+	}
+	if info.Denials > 0 {
+		lines = append(lines, fieldLine("Denied by User", toolErrorStyle.Render(fmt.Sprintf("%d", info.Denials))))
 	}
 	lines = append(lines, "")
+
+	// Per-tool breakdown — what the agent actually spent its calls on
+	if len(info.ToolCounts) > 0 {
+		lines = append(lines, sectionHeader("Operations by Tool"))
+		lines = append(lines, renderToolBreakdown(info.ToolCounts, min(width-24, 40))...)
+		lines = append(lines, "")
+	}
+
+	// Code churn
+	if info.LinesAdded > 0 || info.LinesRemoved > 0 {
+		lines = append(lines, sectionHeader("Code Changes"))
+		lines = append(lines, fieldLine("Net Churn", fmt.Sprintf("%s  %s",
+			diffAddStyle.Render(fmt.Sprintf("+%d", info.LinesAdded)),
+			diffRemoveStyle.Render(fmt.Sprintf("-%d", info.LinesRemoved)))))
+		lines = append(lines, "")
+		shown := info.FileChurns
+		if len(shown) > 12 {
+			shown = shown[:12]
+		}
+		for _, c := range shown {
+			if c.LinesAdded == 0 && c.LinesRemoved == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("    %s %s %s  %s",
+				diffAddStyle.Render(fmt.Sprintf("%+5d", c.LinesAdded)),
+				diffRemoveStyle.Render(fmt.Sprintf("%-5d", -c.LinesRemoved)),
+				mutedStyle.Render(fmt.Sprintf("%dx", c.Edits)),
+				normalStyle.Render(shortPath(c.Path, info.CWD))))
+		}
+		if len(info.FileChurns) > 12 {
+			lines = append(lines, "    "+mutedStyle.Render(fmt.Sprintf("... and %d more files", len(info.FileChurns)-12)))
+		}
+		lines = append(lines, "")
+	}
 
 	// Todos section
 	if len(todos) > 0 {
@@ -204,4 +263,67 @@ func formatTokensComma(n int) string {
 		out = append(out, byte(ch))
 	}
 	return string(out)
+}
+
+// activePercent expresses reported turn time as a share of wall-clock elapsed time.
+func activePercent(active, elapsed time.Duration) float64 {
+	if elapsed <= 0 {
+		return 0
+	}
+	return float64(active) / float64(elapsed) * 100
+}
+
+// renderToolBreakdown draws a sorted bar chart of tool call counts.
+func renderToolBreakdown(counts map[string]int, barWidth int) []string {
+	type kv struct {
+		name string
+		n    int
+	}
+	items := make([]kv, 0, len(counts))
+	maxN, maxName := 0, 0
+	for name, n := range counts {
+		items = append(items, kv{name, n})
+		if n > maxN {
+			maxN = n
+		}
+		if len(name) > maxName {
+			maxName = len(name)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].n != items[j].n {
+			return items[i].n > items[j].n
+		}
+		return items[i].name < items[j].name
+	})
+
+	if barWidth < 8 {
+		barWidth = 8
+	}
+	var out []string
+	for _, it := range items {
+		w := 0
+		if maxN > 0 {
+			w = it.n * barWidth / maxN
+		}
+		if w == 0 && it.n > 0 {
+			w = 1
+		}
+		out = append(out, fmt.Sprintf("    %s %s %s",
+			dimStyle.Render(fmt.Sprintf("%-*s", maxName, it.name)),
+			toolUseStyle.Render(strings.Repeat("▪", w)),
+			mutedStyle.Render(fmt.Sprintf("%d", it.n))))
+	}
+	return out
+}
+
+// shortPath renders a path relative to cwd when it sits underneath it.
+func shortPath(path, cwd string) string {
+	if cwd == "" {
+		return path
+	}
+	if rel, err := filepath.Rel(cwd, path); err == nil && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return path
 }
