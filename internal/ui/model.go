@@ -18,6 +18,7 @@ const (
 	viewOverview          // session summary (opt-in via "s")
 	viewEvent             // single event drill-down
 	viewProject           // project-level view
+	viewReplay            // step-by-step playback of a session
 )
 
 // sessionsUpdatedMsg signals that the session store has new data.
@@ -56,6 +57,26 @@ type Model struct {
 
 	// Session todos
 	sessionTodos []session.TodoItem
+
+	// Replay: one step of the session at a time, at reading speed.
+	replaySteps   []session.ReplayStep
+	replayIndex   int
+	replayScroll  int
+	replayPlaying bool
+	replayDelay   time.Duration
+	// replayTyped is how many characters of the current step have been typed
+	// out. -1 means "all of it", which is what a paused step shows: a reader
+	// who has stopped to look wants the whole diff, not a half-written one.
+	replayTyped int
+	// replayLive keeps playback alive at the end of a session that is still
+	// being written, so a running agent can be followed at reading speed.
+	// Falling behind is expected and reported, not corrected.
+	replayLive bool
+	// replayCodeOnly narrows the step list to the steps that wrote code.
+	replayCodeOnly bool
+	// replayGen invalidates ticks scheduled before a pause, a manual step or a
+	// speed change. Without it a stale tick would advance a second step.
+	replayGen int
 
 	width  int
 	height int
@@ -116,7 +137,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case sessionsUpdatedMsg:
+		// Identify the step being read before the session is swapped for a
+		// fresh parse: afterwards the old index may point somewhere else.
+		anchor := m.replayStepUUID()
+		wasWaiting := m.replayWaiting()
+
 		m.refreshSessions()
+
+		if m.mode == viewReplay {
+			m.rebuildReplay(anchor)
+			// A replay that had caught up now has more to play.
+			if wasWaiting && !m.replayAtEnd() {
+				m.replayTyped = 0
+				m.replayGen++
+				return m, tea.Batch(m.watchForUpdates, m.replayAdvanceCmd())
+			}
+		}
 		// Auto-scroll to bottom when in detail view (follow live output)
 		if m.mode == viewDetail && m.selectedSession != nil && m.autoFollow {
 			m.detailCursor = max(0, len(m.visibleEvents())-1)
@@ -161,6 +197,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshSessions()
 		return m, clearStatusIn(deleteStatusDuration)
 
+	case replayTypeMsg:
+		if msg.gen != m.replayGen || !m.replayPlaying || m.mode != viewReplay {
+			return m, nil
+		}
+		m.replayTyped += m.replayCharsPerTick()
+		return m, m.replayAdvanceCmd()
+
+	case replayTickMsg:
+		// Ignore ticks from before the last pause/step/speed change.
+		if msg.gen != m.replayGen || !m.replayPlaying || m.mode != viewReplay {
+			return m, nil
+		}
+		if m.replayAtEnd() {
+			// Caught up. If the session is still being written, hold and poll
+			// rather than declaring an end that has not happened yet.
+			if m.replayLive && m.replaySessionActive() {
+				m.replayTyped = -1
+				return m, replayTickCmd(m.replayDelay, m.replayGen)
+			}
+			m.replayPlaying = false
+			m.replayTyped = -1
+			m.statusMsg = "Replay finished — 0 to restart"
+			return m, clearStatusAfter()
+		}
+		m.replayIndex++
+		m.replayScroll = 0
+		m.replayTyped = 0
+		return m, m.replayAdvanceCmd()
+
 	case statusClearMsg:
 		m.statusMsg = ""
 		return m, nil
@@ -186,6 +251,7 @@ func (m Model) View() string {
 			{"s", "summary"},
 			{"p", "project"},
 			{"c", "continue"},
+			{"R", "replay"},
 			{"n", "new"},
 			{"y", "yank"},
 			{"F", "fork"},
@@ -218,6 +284,7 @@ func (m Model) View() string {
 			{"tab", "filter: " + m.eventFilter.label()},
 			{"N", "next fail"},
 			{"s", "summary"},
+			{"R", "replay"},
 			{"c", "continue"},
 			{"d", "delete"},
 			{"f", followLabel},
@@ -248,6 +315,43 @@ func (m Model) View() string {
 		help = renderHelp([]helpKey{
 			{"↑/↓", "scroll"},
 			{"←", "back"},
+			{"q", "quit"},
+		})
+
+	case viewReplay:
+		if m.selectedSession != nil {
+			content = renderReplay(replayView{
+				sess:     m.selectedSession,
+				steps:    m.replaySteps,
+				idx:      m.replayIndex,
+				scroll:   m.replayScroll,
+				typed:    m.replayTyped,
+				playing:  m.replayPlaying,
+				waiting:  m.replayWaiting(),
+				codeOnly: m.replayCodeOnly,
+				delay:    m.replayDelay,
+				width:    m.width,
+				height:   m.height,
+			})
+		}
+		playLabel := "play"
+		if m.replayPlaying {
+			playLabel = "pause"
+		}
+		liveLabel := "live"
+		if m.replayLive {
+			liveLabel = "live ●"
+		}
+		help = renderHelp([]helpKey{
+			{"space", playLabel},
+			{"→/←", "step"},
+			{"↑/↓", "scroll"},
+			{"+/-", "speed"},
+			{"0", "restart"},
+			{"tab", "code only"},
+			{"f", liveLabel},
+			{"t", "timeline"},
+			{"esc", "back"},
 			{"q", "quit"},
 		})
 
@@ -297,6 +401,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// every letter of the query would trigger a command.
 	if m.searchTyping {
 		return m.handleSearchKey(msg, key)
+	}
+
+	// Replay owns its keys: stepping, scrolling and speed all reuse letters
+	// that mean something else elsewhere.
+	if m.mode == viewReplay {
+		return m.handleReplayKey(msg, key)
 	}
 
 	// Normalize space to "enter" so it works as a selection key
@@ -592,6 +702,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if prompt := lastUserPrompt(sess); prompt != "" {
 				return m, forkSessionCmd(info.Source, info.CWD, prompt)
 			}
+		}
+
+	case "R":
+		// Replay the session one step at a time.
+		if sess := m.sessionInContext(); sess != nil {
+			m.startReplay(sess)
+			return m, m.replayAdvanceCmd()
 		}
 
 	case "/":

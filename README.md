@@ -17,6 +17,8 @@ interactive, color-coded viewer with real-time updates.
 - Detailed event drill-down with diff highlighting for file edits
 - Session summary with token usage breakdown and activity stats
 - Cost reconstructed per model from published rates, rather than one flat rate
+- Replay a session one step at a time, at reading speed, to follow work that
+  originally scrolled past in seconds
 - Live auto-follow mode — watch sessions update in real time
 - Mouse scroll support
 - Filter by project name
@@ -114,11 +116,99 @@ OpenCode sessions are marked `◈` in the session list, Claude Code sessions `�
 | `PgUp` / `PgDn` | Page up / down |
 | `d` | Delete session (asks to confirm) |
 | `s` | Toggle session summary |
+| `R` | Replay the session step by step |
 | `f` | Toggle auto-follow (timeline view) |
 | `r` | Refresh session list |
 | `q` / `Ctrl+C` | Quit |
 
+In the replay view:
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play / pause |
+| `Right` | Finish typing this step, or move to the next |
+| `Left` | Previous step |
+| `Up` / `Down` | Scroll — takes manual control and pauses |
+| `+` / `-` | Faster / slower (0.5s to 15s per step) |
+| `Tab` | Code only — just the steps that wrote something |
+| `f` | Follow a running session (on by default) |
+| `0` | Back to the first step |
+| `t` | Jump to this point in the timeline |
+| `Esc` | Back |
+
 Mouse scroll is also supported in all views.
+
+## Replay
+
+Agents work faster than anyone can read. Replay gives one operation the whole
+screen — what it did, in plain English, and the real evidence underneath: the
+diff hunks Claude Code recorded, the command and what it actually printed.
+Press `R` on any session, then `Space` to let it run.
+
+**Code is typed out, not pasted in.** While playing, a diff is written a
+character at a time at about 100 a second, with the viewport following the
+cursor so the code arrives in front of you rather than off-screen. `+` and `-`
+change the whole pace, typing and holds together. Command output is never
+typed — a diff is worth following keystroke by keystroke, nine kilobytes of log
+output is not.
+
+Pausing or scrolling hands control back to you and reveals the whole step at
+once, because stopping to look means you want to read it, not watch it.
+
+### Finding the code
+
+Most of what an agent does is not writing code. Across one machine's
+transcripts there were 2592 shell commands against 549 edits, so the steps that
+actually produced something are easily buried. **`Tab` narrows the replay to
+the steps that wrote code** — a recorded diff, a new file, or a shell heredoc —
+and the header says `code only` while it is on.
+
+Verbose looks for that code in three places, because a diff alone finds very
+little of it:
+
+| Where the code is | When |
+|---|---|
+| `structuredPatch` | An `Edit` to a file that already existed |
+| The `Write` tool's `content` input | A **new** file — Claude Code records an *empty* patch, since there is no "before" |
+| A shell heredoc body | The agent wrote the file through `Bash` — no patch is recorded at all |
+
+On one session those last two rows took the visible-code steps from 1 to 173.
+Machine-wide, from 6.4% of steps to 21.3%.
+
+A heredoc piped to an interpreter (`python3 - <<'PY'`) is shown as code but
+labelled without a filename, because it writes no file — it is the script that
+did the editing, not the result.
+
+Streamed code is **syntax highlighted**, with the language taken from the
+filename, or analysed from the content when a heredoc has no target. The colour
+depth matches the terminal: truecolor where there is truecolor, 256 colours
+otherwise. Highlighted files are cached, so a step costs about a millisecond to
+re-render regardless of size.
+
+### Following a live session
+
+Replay follows a session that is still being written. When it reaches the last
+recorded step and the transcript is still growing, it holds — `◴ live` — and
+plays new steps as they arrive. It reads at human speed while the agent works
+at its own, so it falls behind; the gap is shown as `N behind` rather than
+skipped. `f` turns following off.
+
+It keeps the steps that carry the narrative — prompts, the agent's own
+"here's what I'll do next", and every operation — and drops the bookkeeping
+(hook progress, turn timings, bash keepalives). Subagent steps are marked, so
+you can see where work was handed off and follow what the agent did with it.
+
+If you want this *live* — an agent typing into your real editor while you
+steer, which a transcript viewer cannot do — see
+[AI Pair](https://github.com/faiface/ai-pair), a VS Code extension that gives
+your existing agent a second cursor over MCP.
+
+One honest limitation: **a replay can tell you what happened, not why.**
+Extended thinking is signed but never written to the transcript, so every
+thinking block on disk has an empty body. What a step shows is derived from
+what was recorded — files, line counts, exit behaviour — and the agent's own
+narration where it exists. Generated explanations are a separate layer, not
+yet built.
 
 ## How it works
 
