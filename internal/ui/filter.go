@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 )
 
 // eventFilter narrows the timeline to a class of events.

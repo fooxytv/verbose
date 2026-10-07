@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -343,7 +343,7 @@ func formatToolSummary(tool string, input map[string]interface{}, cwd string) st
 			}
 			return fmt.Sprintf(`"%s" %s`, p, shortPath(path, cwd))
 		}
-	case "Task":
+	case "Task", "Agent":
 		desc, _ := input["description"].(string)
 		agentType, _ := input["subagent_type"].(string)
 		if agentType != "" && desc != "" {
@@ -701,6 +701,44 @@ func truncate(s string, maxLen int) string {
 	return string(r[:maxLen-1]) + "…"
 }
 
+// truncateVisible clips to a printable-column budget while leaving ANSI escape
+// sequences intact. Counting escapes as characters cut styled columns short:
+// the churn figures are coloured, so a plain rune count ate them.
+func truncateVisible(s string, maxLen int) string {
+	if maxLen < 0 {
+		maxLen = 0
+	}
+	if visibleLen(s) <= maxLen {
+		return s
+	}
+
+	var b strings.Builder
+	n := 0
+	inEsc := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			b.WriteRune(r)
+			continue
+		}
+		if inEsc {
+			b.WriteRune(r)
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		if n >= maxLen {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	// Close any style the cut landed inside of.
+	b.WriteString("\x1b[0m")
+	return b.String()
+}
+
 // truncateRunes cuts to a rune count without appending an ellipsis.
 func truncateRunes(s string, maxLen int) string {
 	if maxLen <= 0 {
@@ -933,7 +971,7 @@ func toolStyles(e session.Event) (lipgloss.Style, lipgloss.Style) {
 		return lipgloss.NewStyle().Foreground(colorCyan).Bold(true), dimStyle
 	case "Bash":
 		return lipgloss.NewStyle().Foreground(colorOrange).Bold(true), dimStyle
-	case "Task":
+	case "Task", "Agent":
 		return agentStyle.Copy().Bold(true), agentStyle
 	}
 	return toolUseStyle, dimStyle

@@ -4,10 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/internal/jsonout"
 	"github.com/fooxytv/verbose/internal/ui"
+	"github.com/fooxytv/verbose/pkg/session"
 )
 
 // Set via ldflags: go build -ldflags "-X main.version=..."
@@ -23,7 +25,10 @@ func main() {
 	}
 
 	project := flag.String("project", "", "filter to a specific project name")
-	opencode := flag.String("opencode", "", "path to an OpenCode database (.opencode/opencode.db)")
+	opencode := flag.String("opencode", "", "path to an OpenCode database (defaults to ~/.local/share/opencode/opencode.db)")
+	jsonKind := flag.String("json", "", "print JSON instead of opening the UI: "+strings.Join(jsonout.Kinds, " | "))
+	jsonEvents := flag.Bool("events", false, "include the event timeline in -json session output")
+	jsonLimit := flag.Int("limit", 0, "cap how many sessions -json returns (0 = no cap)")
 	flag.Parse()
 
 	store, err := session.NewStore()
@@ -40,6 +45,22 @@ func main() {
 	// Initial scan of all sessions
 	if err := store.Scan(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to scan sessions: %v\n", err)
+	}
+
+	// Headless mode: answer one query on stdout and exit. No watcher, no UI.
+	if *jsonKind != "" {
+		q := jsonout.Query{
+			Kind:    *jsonKind,
+			Project: *project,
+			Session: flag.Arg(0),
+			Events:  *jsonEvents,
+			Limit:   *jsonLimit,
+		}
+		if err := jsonout.Run(os.Stdout, store, q); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Start watching for file changes

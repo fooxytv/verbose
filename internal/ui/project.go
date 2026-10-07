@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 )
 
 // renderProjectView renders the project-level view with memory, stats, and session list.

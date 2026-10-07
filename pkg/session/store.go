@@ -76,54 +76,201 @@ func (s *Store) Scan() error {
 		}
 
 		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+			// A project directory holds its sessions as flat .jsonl files, and
+			// one directory per session carrying that session's subagent runs.
+			if f.IsDir() {
+				s.scanSubagents(filepath.Join(projectDir, f.Name()))
+				continue
+			}
+			if !strings.HasSuffix(f.Name(), ".jsonl") {
 				continue
 			}
 
 			path := filepath.Join(projectDir, f.Name())
-			sess, err := ParseSessionFile(path)
-			if err != nil {
-				continue
-			}
-			if len(sess.Events) == 0 {
-				continue
-			}
-
-			s.mu.Lock()
-			s.sessions[sess.Info.ID] = sess
-			s.mu.Unlock()
+			s.load(path)
 		}
 	}
 
 	// Scan for OpenCode databases
 	s.scanOpenCodeDBs()
 
+	// Every transcript is loaded by now, so subagent runs can be anchored back
+	// into the sessions that launched them.
+	s.linkSubagents()
+
 	return nil
 }
 
-// scanOpenCodeDBs discovers and parses OpenCode databases.
+// linkSubagents splices each subagent run into its parent's timeline, at the
+// Task call that launched it.
+//
+// Claude Code writes a background agent's turns to its own file rather than
+// inline, so a parent transcript on its own shows a Task call and nothing about
+// what the agent then did. Folding the turns in gives one timeline per piece of
+// work — the same shape OpenCode sessions already get.
+//
+// The subagent also stays in the session list in its own right: it is useful to
+// see what one run cost. Only its events are copied, never its tokens or cost,
+// so a project total still counts them exactly once.
+func (s *Store) linkSubagents() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Group children by parent so one parent is spliced in a single pass.
+	children := make(map[string][]*Session)
+	for _, sess := range s.sessions {
+		if sess.Info.IsAgent && sess.Info.ParentSessionID != "" {
+			children[sess.Info.ParentSessionID] = append(
+				children[sess.Info.ParentSessionID], sess)
+		}
+	}
+
+	for parentID, kids := range children {
+		parent := s.sessions[parentID]
+		if parent == nil {
+			continue // the parent transcript is gone; the run stands alone
+		}
+
+		// agent id -> the Task tool_use that started it.
+		anchors := make(map[string]string, len(parent.SubagentLaunches))
+		for toolUseID, agentID := range parent.SubagentLaunches {
+			anchors[agentID] = toolUseID
+		}
+
+		type insert struct {
+			at     int
+			events []Event
+		}
+		var inserts []insert
+
+		for _, kid := range kids {
+			agentID := strings.TrimPrefix(kid.Info.ID, "agent-")
+			if alreadySpliced(parent, agentID) {
+				continue
+			}
+
+			events := make([]Event, len(kid.Events))
+			copy(events, kid.Events)
+			for i := range events {
+				events[i].IsSidechain = true
+				if events[i].AgentID == "" {
+					events[i].AgentID = agentID
+				}
+			}
+
+			at := spliceIndex(parent, anchors[agentID], kid)
+			inserts = append(inserts, insert{at: at, events: events})
+			parent.Info.SubagentEvents += len(events)
+		}
+		if len(inserts) == 0 {
+			continue
+		}
+
+		// Insert from the back so an earlier insertion cannot shift a later
+		// index out from under us.
+		sort.Slice(inserts, func(i, j int) bool { return inserts[i].at > inserts[j].at })
+		for _, ins := range inserts {
+			rest := append([]Event{}, parent.Events[ins.at:]...)
+			parent.Events = append(parent.Events[:ins.at], ins.events...)
+			parent.Events = append(parent.Events, rest...)
+		}
+		parent.Info.EventCount = len(parent.Events)
+	}
+}
+
+// alreadySpliced reports whether this agent's turns are in the parent already,
+// so a rescan cannot duplicate them.
+func alreadySpliced(parent *Session, agentID string) bool {
+	for i := range parent.Events {
+		if parent.Events[i].IsSidechain && parent.Events[i].AgentID == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// spliceIndex is where a subagent's turns belong in its parent's timeline:
+// immediately after the Task call that launched it, or failing that, in
+// timestamp order.
+func spliceIndex(parent *Session, toolUseID string, kid *Session) int {
+	if toolUseID != "" {
+		for i := range parent.Events {
+			if parent.Events[i].Type == EventToolUse &&
+				parent.Events[i].ToolID == toolUseID {
+				return i + 1
+			}
+		}
+	}
+
+	// No anchor — the result that names the agent may be missing. Fall back to
+	// chronology rather than guessing a position.
+	start := kid.Info.StartTime
+	for i := range parent.Events {
+		if parent.Events[i].Timestamp.After(start) {
+			return i
+		}
+	}
+	return len(parent.Events)
+}
+
+// scanSubagents reads the subagent runs recorded under one session's
+// directory. Each is a transcript in its own right — the agent's prompt, every
+// tool call it made, what it returned — so it is parsed and stored like any
+// other session, keyed by its own agent id.
+func (s *Store) scanSubagents(sessionDir string) {
+	subagentDir := filepath.Join(sessionDir, "subagents")
+	entries, err := os.ReadDir(subagentDir)
+	if err != nil {
+		return // no subagents for this session, which is the common case
+	}
+
+	_ = s.watcher.Add(subagentDir)
+
+	for _, f := range entries {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+			continue
+		}
+		s.load(filepath.Join(subagentDir, f.Name()))
+	}
+}
+
+// load parses one transcript into the store, ignoring files that fail to parse
+// or carry no events.
+func (s *Store) load(path string) {
+	sess, err := ParseSessionFile(path)
+	if err != nil || len(sess.Events) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.sessions[sess.Info.ID] = sess
+	s.mu.Unlock()
+}
+
+// scanOpenCodeDBs discovers and parses OpenCode databases. OpenCode keeps a
+// single database under its data directory covering every project, so the
+// global locations are the ones that matter; per-project databases are still
+// checked for older layouts.
 func (s *Store) scanOpenCodeDBs() {
 	candidates := make(map[string]bool)
 
-	// Check explicitly provided paths
 	for _, p := range s.ocExtraDBs {
 		candidates[p] = true
 	}
+	for _, p := range DefaultOpenCodeDBs() {
+		candidates[p] = true
+	}
 
-	// Check CWD of existing Claude sessions for co-located OpenCode DBs
+	// Legacy per-project databases, alongside the projects already known.
 	s.mu.RLock()
 	for _, sess := range s.sessions {
 		if sess.Info.CWD != "" {
-			dbPath := filepath.Join(sess.Info.CWD, ".opencode", "opencode.db")
-			candidates[dbPath] = true
+			candidates[filepath.Join(sess.Info.CWD, ".opencode", "opencode.db")] = true
 		}
 	}
 	s.mu.RUnlock()
 
-	// Check the current working directory
 	if cwd, err := os.Getwd(); err == nil {
-		dbPath := filepath.Join(cwd, ".opencode", "opencode.db")
-		candidates[dbPath] = true
+		candidates[filepath.Join(cwd, ".opencode", "opencode.db")] = true
 	}
 
 	for dbPath := range candidates {
@@ -132,14 +279,13 @@ func (s *Store) scanOpenCodeDBs() {
 			continue
 		}
 
-		s.ocDBs[dbPath] = info.ModTime()
-
 		sessions, err := ParseOpenCodeDB(dbPath)
 		if err != nil {
 			continue
 		}
 
 		s.mu.Lock()
+		s.ocDBs[dbPath] = info.ModTime()
 		for _, sess := range sessions {
 			s.sessions[sess.Info.ID] = sess
 		}
@@ -209,7 +355,15 @@ func (s *Store) watchOpenCode() {
 
 	for range ticker.C {
 		changed := false
-		for dbPath, lastMtime := range s.ocDBs {
+
+		s.mu.RLock()
+		tracked := make(map[string]time.Time, len(s.ocDBs))
+		for dbPath, mtime := range s.ocDBs {
+			tracked[dbPath] = mtime
+		}
+		s.mu.RUnlock()
+
+		for dbPath, lastMtime := range tracked {
 			info, err := os.Stat(dbPath)
 			if err != nil {
 				continue
@@ -218,14 +372,13 @@ func (s *Store) watchOpenCode() {
 				continue
 			}
 
-			s.ocDBs[dbPath] = info.ModTime()
-
 			sessions, err := ParseOpenCodeDB(dbPath)
 			if err != nil {
 				continue
 			}
 
 			s.mu.Lock()
+			s.ocDBs[dbPath] = info.ModTime()
 			for _, sess := range sessions {
 				s.sessions[sess.Info.ID] = sess
 			}
@@ -379,8 +532,17 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 	return proj
 }
 
-// GetSessionTodos reads todo items for a session from ~/.claude/todos/.
+// GetSessionTodos returns a session's todo items. OpenCode records them in the
+// session database, so they are already attached; Claude Code keeps them in
+// ~/.claude/todos/ and they are read from there.
 func (s *Store) GetSessionTodos(sessionID string) []TodoItem {
+	s.mu.RLock()
+	sess := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if sess != nil && len(sess.Todos) > 0 {
+		return sess.Todos
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil

@@ -24,17 +24,13 @@ func launchInTerminal(cli string, args []string, cwd string) tea.Cmd {
 	return launchInPlace(cli, args, cwd)
 }
 
-// resumeSessionCmd returns a tea.Cmd that resumes a session.
+// resumeSessionCmd returns a tea.Cmd that resumes a session. The two CLIs spell
+// it differently: claude takes --resume, opencode takes --session.
 func resumeSessionCmd(sessionID, cwd string) tea.Cmd {
-	cli := "claude"
-	resumeID := sessionID
-
-	if strings.HasPrefix(sessionID, "oc-") {
-		cli = "opencode"
-		resumeID = strings.TrimPrefix(sessionID, "oc-")
+	if id, ok := strings.CutPrefix(sessionID, "oc-"); ok {
+		return launchInTerminal("opencode", []string{"--session", id}, cwd)
 	}
-
-	return launchInTerminal(cli, []string{"--resume", resumeID}, cwd)
+	return launchInTerminal("claude", []string{"--resume", sessionID}, cwd)
 }
 
 // newSessionCmd starts a fresh CLI session (no --resume) in the same CWD.
@@ -48,12 +44,11 @@ func newSessionCmd(source, cwd string) tea.Cmd {
 
 // forkSessionCmd starts a new CLI session with the last prompt as the first message.
 func forkSessionCmd(source, cwd, lastPrompt string) tea.Cmd {
-	cli := "claude"
-	if source == "opencode" {
-		cli = "opencode"
-	}
 	prompt := "Continue from previous session:\n\n" + lastPrompt
-	return launchInTerminal(cli, []string{prompt}, cwd)
+	if source == "opencode" {
+		return launchInTerminal("opencode", []string{"--prompt", prompt}, cwd)
+	}
+	return launchInTerminal("claude", []string{prompt}, cwd)
 }
 
 // yankPromptCmd copies text to clipboard using pbcopy.

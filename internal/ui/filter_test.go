@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 )
 
 func testSession() *session.Session {

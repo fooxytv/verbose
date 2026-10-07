@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 )
 
 // renderSessionOverview renders the detailed overview panel for a session.

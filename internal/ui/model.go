@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -65,6 +65,13 @@ type Model struct {
 
 	// Transient status message (e.g. "Copied to clipboard")
 	statusMsg string
+
+	// Session awaiting delete confirmation; every key is captured while set
+	confirmDelete *session.SessionInfo
+
+	// A delete is in flight. Removing an OpenCode session shells out to its
+	// CLI and takes about a second, which otherwise looks like a freeze.
+	deleting bool
 
 	// Timeline filter and search
 	eventFilter  eventFilter
@@ -130,9 +137,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMsg = "Copied last prompt to clipboard"
 		}
-		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-			return statusClearMsg{}
-		})
+		return m, clearStatusAfter()
+
+	case sessionDeletedMsg:
+		m.deleting = false
+		m.statusMsg = deleteResultMessage(msg)
+		// The open session may be the one that just went away.
+		if msg.err == nil && m.selectedSession != nil && m.selectedSession.Info.ID == msg.id {
+			m.selectedSession = nil
+			m.selectedEvent = nil
+			m.detailCursor = 0
+			m.autoFollow = false
+			m.resetTimelineFilter()
+			m.mode = viewSessions
+		}
+		if msg.err == nil && m.selectedProject != nil {
+			// Rebuild the project view so its session list drops the deleted row.
+			if proj := m.store.GetProjectInfo(m.selectedProject.ProjectDir); proj != nil {
+				m.selectedProject = proj
+				m.projectCursor = min(m.projectCursor, max(0, len(proj.Sessions)-1))
+			}
+		}
+		m.refreshSessions()
+		return m, clearStatusIn(deleteStatusDuration)
 
 	case statusClearMsg:
 		m.statusMsg = ""
@@ -162,6 +189,7 @@ func (m Model) View() string {
 			{"n", "new"},
 			{"y", "yank"},
 			{"F", "fork"},
+			{"d", "delete"},
 			{"r", "refresh"},
 			{"q", "quit"},
 		})
@@ -191,6 +219,7 @@ func (m Model) View() string {
 			{"N", "next fail"},
 			{"s", "summary"},
 			{"c", "continue"},
+			{"d", "delete"},
 			{"f", followLabel},
 			{"q", "quit"},
 		})
@@ -208,6 +237,7 @@ func (m Model) View() string {
 			{"↑/↓", "scroll"},
 			{"←/esc", "back"},
 			{"p", "project"},
+			{"d", "delete"},
 			{"q", "quit"},
 		})
 
@@ -231,21 +261,37 @@ func (m Model) View() string {
 			{"enter", "open"},
 			{"c", "continue"},
 			{"n", "new"},
+			{"d", "delete"},
 			{"←/esc", "back"},
 			{"q", "quit"},
 		})
 	}
 
-	versionTag := mutedStyle.Render("  v" + m.version)
-	status := ""
-	if m.statusMsg != "" {
-		status = statusStyle.Render(m.statusMsg)
+	// The footer holds one thing at a time. A pending delete outranks a status
+	// message, which outranks the help: appending them instead pushed the text
+	// past the right edge, so a delete looked like it had done nothing.
+	switch {
+	case m.confirmDelete != nil:
+		help = deletePrompt(*m.confirmDelete)
+	case m.statusMsg != "":
+		help = statusStyle.Render(m.statusMsg)
 	}
-	return content + "\n" + help + versionTag + status
+
+	versionTag := mutedStyle.Render("  v" + m.version)
+
+	// Pin the footer to the last row of the terminal. Views whose content is
+	// shorter than the window would otherwise leave it floating mid-screen.
+	return padToHeight(content, m.height-1) + "\n" + help + versionTag
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// A pending delete swallows every key until it is confirmed or cancelled,
+	// so no binding can fire by accident with the prompt on screen.
+	if m.confirmDelete != nil {
+		return m.handleDeleteConfirmKey(key)
+	}
 
 	// While typing a search the timeline keybindings are suspended, otherwise
 	// every letter of the query would trigger a command.
@@ -441,6 +487,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.mode = viewProject
 				}
 			}
+		}
+
+	case "d":
+		// Ask before removing anything: deletion touches real files.
+		if target := m.deleteTarget(); target != nil {
+			m.confirmDelete = target
 		}
 
 	case "c":
@@ -704,6 +756,24 @@ func (m *Model) refreshSessions() {
 	}
 }
 
+// How long a transient status message stays on screen. Delete results get
+// longer, because they report something irreversible.
+const (
+	statusDuration       = 2 * time.Second
+	deleteStatusDuration = 5 * time.Second
+)
+
+// clearStatusAfter wipes the transient status message after a short delay.
+func clearStatusAfter() tea.Cmd {
+	return clearStatusIn(statusDuration)
+}
+
+func clearStatusIn(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return statusClearMsg{}
+	})
+}
+
 func (m Model) loadSessions() tea.Msg {
 	return sessionsUpdatedMsg{}
 }
@@ -714,6 +784,23 @@ func (m Model) watchForUpdates() tea.Msg {
 	}
 	<-m.updates
 	return sessionsUpdatedMsg{}
+}
+
+// padToHeight makes a block occupy exactly n lines, padding short content and
+// trimming anything that would push the footer off the bottom of the screen.
+func padToHeight(content string, n int) string {
+	if n <= 0 {
+		return content
+	}
+
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	for len(lines) < n {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 type helpKey struct {

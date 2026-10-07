@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fooxytv/verbose/internal/session"
+	"github.com/fooxytv/verbose/pkg/session"
 )
 
 // renderSessionsList renders the sessions list view.
@@ -18,11 +18,12 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 	b.WriteString("\n")
 
 	// Column headers
-	cols := mutedStyle.Render(fmt.Sprintf("  %-4s  %-18s  %-10s  %7s  %9s  %8s  %5s  %5s  %11s",
-		"", "PROJECT", "SESSION", "AGO", "TOKENS", "COST", "TOOLS", "EDITS", "CHURN"))
-	b.WriteString(cols)
+	labelWidth := sessionLabelWidth(width)
+	cols := fmt.Sprintf("  %-4s  %-18s  %-*s  %7s  %9s  %8s  %5s  %5s  %11s",
+		"", "PROJECT", labelWidth, "LABEL", "AGO", "TOKENS", "COST", "TOOLS", "EDITS", "CHURN")
+	b.WriteString(mutedStyle.Render(truncateRunes(cols, width)))
 	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render(strings.Repeat("─", min(width, 104))))
+	b.WriteString(mutedStyle.Render(strings.Repeat("─", min(width, sessionFixedWidth+labelWidth))))
 	b.WriteString("\n")
 
 	if len(sessions) == 0 {
@@ -83,10 +84,15 @@ func formatSessionLine(s session.SessionInfo, width int) string {
 	tokenStr := formatTokens(totalTokens)
 	costStr := fmt.Sprintf("$%.4f", s.CostUSD)
 
-	shortID := s.ID
-	if len(shortID) > 10 {
-		shortID = shortID[:8] + ".."
+	// The ID is not worth a column: Claude's are random UUIDs and OpenCode's
+	// share a long prefix, so a truncated one identified nothing. Show what the
+	// session is instead — the full ID is on the summary view.
+	label := s.Title
+	if label == "" {
+		label = s.ID
 	}
+	labelWidth := sessionLabelWidth(width)
+	label = truncate(label, labelWidth)
 
 	project := s.ProjectName
 	if len(project) > 18 {
@@ -103,8 +109,29 @@ func formatSessionLine(s session.SessionInfo, width int) string {
 			diffRemoveStyle.Render(fmt.Sprintf("%-5d", -s.LinesRemoved)))
 	}
 
-	return fmt.Sprintf("%-4s  %-18s  %-10s  %7s  %9s  %8s  %5s  %5s  %s",
-		status, project, shortID, ago, tokenStr, costStr, toolStr, editStr, churnStr)
+	// The caller indents each row by two columns.
+	row := fmt.Sprintf("%-4s  %-18s  %-*s  %7s  %9s  %8s  %5s  %5s  %s",
+		status, project, labelWidth, label,
+		ago, tokenStr, costStr, toolStr, editStr, churnStr)
+	return truncateVisible(row, max(0, width-2))
+}
+
+// sessionFixedWidth is every column of the sessions list except the label,
+// counting the two-space gutters and the leading indent.
+const sessionFixedWidth = 85
+
+// sessionLabelWidth gives the label whatever room the fixed columns leave,
+// within bounds that keep it readable on a narrow terminal and from running
+// away on a wide one.
+func sessionLabelWidth(width int) int {
+	w := width - sessionFixedWidth
+	if w < 8 {
+		return 8
+	}
+	if w > 60 {
+		return 60
+	}
+	return w
 }
 
 func timeAgo(t time.Time) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -22,18 +23,17 @@ func ParseSessionFile(path string) (*Session, error) {
 	sessionID := strings.TrimSuffix(basename, ".jsonl")
 	isAgent := strings.HasPrefix(basename, "agent-")
 
-	// Decode the project path from the directory name
-	dirName := filepath.Base(filepath.Dir(path))
-	projectDir := strings.ReplaceAll(dirName, "-", "/")
+	projectDir, parentID := locate(path)
 	projectName := filepath.Base(projectDir)
 
 	sess := &Session{
 		Info: SessionInfo{
-			ID:          sessionID,
-			ProjectDir:  projectDir,
-			ProjectName: projectName,
-			FilePath:    path,
-			IsAgent:     isAgent,
+			ID:              sessionID,
+			ProjectDir:      projectDir,
+			ProjectName:     projectName,
+			FilePath:        path,
+			IsAgent:         isAgent,
+			ParentSessionID: parentID,
 		},
 	}
 
@@ -48,6 +48,7 @@ func ParseSessionFile(path string) (*Session, error) {
 	filesWritten := make(map[string]bool)
 	filesCreated := make(map[string]bool)
 
+	sess.SubagentLaunches = make(map[string]string)
 	churn := make(map[string]*FileChurn)
 	skills := make(map[string]bool)
 	sess.Info.ToolCounts = make(map[string]int)
@@ -79,6 +80,11 @@ func ParseSessionFile(path string) (*Session, error) {
 		}
 		if sess.Info.GitBranch == "" && entry.GitBranch != "" {
 			sess.Info.GitBranch = entry.GitBranch
+		}
+		// Which agent type a subagent run ran as. Claude Code stamps this on
+		// the run's entries, not only its assistant turns.
+		if sess.Info.AgentType == "" && entry.AttributionAgent != "" {
+			sess.Info.AgentType = entry.AttributionAgent
 		}
 
 		// Index of the first event this entry contributes, so per-entry flags can
@@ -195,7 +201,9 @@ func ParseSessionFile(path string) (*Session, error) {
 					if e.ToolName == "Bash" {
 						sess.Info.BashCommands++
 					}
-				case "Task":
+				// Claude Code renamed this tool Task -> Agent; OpenCode transcripts
+				// normalise to "Task". Old transcripts keep the old name forever.
+				case "Task", "Agent":
 					sess.Info.SubagentCalls++
 				case "WebFetch", "WebSearch":
 					sess.Info.WebRequests++
@@ -206,6 +214,8 @@ func ParseSessionFile(path string) (*Session, error) {
 				}
 			}
 		}
+
+		recordSubagentLaunch(entry, sess)
 
 		// Stamp sidechain provenance onto everything this entry produced.
 		if entry.IsSidechain {
@@ -259,6 +269,7 @@ func ParseSessionFile(path string) (*Session, error) {
 
 	sess.Info.EventCount = len(sess.Events)
 	sess.Info.CostUSD = estimateCost(sess.Info)
+	sess.Info.Title = deriveTitle(sess.Events)
 
 	return sess, nil
 }
@@ -412,26 +423,68 @@ func parseAssistantMessage(entry rawEntry, ts time.Time) []Event {
 	return events
 }
 
+// locate works out which project a transcript belongs to, and its parent.
+//
+// Claude Code writes a project's own sessions flat, as
+// <project>/<session-id>.jsonl, and each subagent run one level down, as
+// <project>/<parent-session-id>/subagents/agent-<agentId>.jsonl. Reading the
+// project from the immediate parent directory is therefore only correct for
+// the flat case; a subagent file has to climb past its parent session.
+func locate(path string) (projectDir, parentID string) {
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) == "subagents" {
+		parentDir := filepath.Dir(dir) // <project>/<parent-session-id>
+		parentID = filepath.Base(parentDir)
+		dir = filepath.Dir(parentDir) // <project>
+	}
+	// The encoded directory name cannot distinguish a path separator from a
+	// hyphen; the CWD recorded in the transcript is the authoritative path.
+	return strings.ReplaceAll(filepath.Base(dir), "-", "/"), parentID
+}
+
+// agentIDPattern matches the id Claude Code reports when a Task launches a
+// background agent: "agentId: a6f11ac2459e5e31b".
+var agentIDPattern = regexp.MustCompile(`agentId:\s*([0-9a-f]{8,})`)
+
+// recordSubagentLaunch notes which agent a Task call started.
+//
+// A background agent's result carries no output — the work lands in its own
+// transcript under <session>/subagents/. The only link back to the call that
+// started it is the agent id in that result, so it is captured here and used to
+// splice the subagent's turns into this session's timeline.
+func recordSubagentLaunch(entry rawEntry, sess *Session) {
+	if entry.Message == nil {
+		return
+	}
+	blocks, ok := entry.Message.Content.([]interface{})
+	if !ok {
+		return
+	}
+	for _, raw := range blocks {
+		block, ok := raw.(map[string]interface{})
+		if !ok || block["type"] != "tool_result" {
+			continue
+		}
+		toolUseID, _ := block["tool_use_id"].(string)
+		if toolUseID == "" {
+			continue
+		}
+		text, err := json.Marshal(block["content"])
+		if err != nil {
+			continue
+		}
+		if m := agentIDPattern.FindSubmatch(text); m != nil {
+			sess.SubagentLaunches[toolUseID] = string(m[1])
+		}
+	}
+}
+
 func parseTimestamp(s string) time.Time {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		t, _ = time.Parse(time.RFC3339, s)
 	}
 	return t
-}
-
-// estimateCost gives a rough USD cost estimate based on Claude pricing.
-// Uses Opus pricing: $15/M input, $75/M output, cache read $1.5/M, cache write $18.75/M
-func estimateCost(info SessionInfo) float64 {
-	inputPrice := 15.0 / 1_000_000.0
-	outputPrice := 75.0 / 1_000_000.0
-	cacheReadPrice := 1.5 / 1_000_000.0
-	cacheWritePrice := 18.75 / 1_000_000.0
-
-	return float64(info.InputTokens)*inputPrice +
-		float64(info.OutputTokens)*outputPrice +
-		float64(info.CacheReadTokens)*cacheReadPrice +
-		float64(info.CacheWriteTokens)*cacheWritePrice
 }
 
 // decodeToolUseResult decodes the toolUseResult payload. Claude Code writes an

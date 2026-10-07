@@ -45,17 +45,36 @@ type SessionInfo struct {
 	SkillsUsed     []string      // distinct skills invoked
 	ActiveDuration time.Duration // sum of reported turn durations
 
+	// Human label for the session: OpenCode records one, Claude Code does not
+	// so the first real user prompt stands in for it.
+	Title string
+
 	IsAgent   bool // agent-* files are subagent sessions
 	Model     string
 	CWD       string
 	GitBranch string
 	Source    string // "claude" or "opencode"
+
+	// Set on a subagent run: the session that spawned it, and the agent type
+	// it ran as ("scout", "general-purpose", ...).
+	ParentSessionID string
+	AgentType       string
 }
 
 // Session is a fully parsed session with all events.
 type Session struct {
 	Info   SessionInfo
 	Events []Event
+
+	// SubagentLaunches maps a Task tool_use id to the agent id it started, read
+	// from the tool result. It is how a subagent's own transcript is anchored
+	// back to the call that launched it.
+	SubagentLaunches map[string]string
+
+	// Todos carried in the transcript itself. Claude Code keeps these in a
+	// separate directory and they are loaded on demand; OpenCode stores them in
+	// the session database, so they arrive already parsed.
+	Todos []TodoItem
 }
 
 // EventType classifies what kind of event occurred.
@@ -169,10 +188,12 @@ type rawEntry struct {
 	// string when the operation failed (e.g. "Error: Exit code 127").
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 
-	IsSidechain    bool            `json:"isSidechain"`
-	ToolDenialKind string          `json:"toolDenialKind"`
-	UserFeedback   json.RawMessage `json:"userFeedback"`
-	Attachment     json.RawMessage `json:"attachment"`
+	IsSidechain      bool            `json:"isSidechain"`
+	AttributionAgent string          `json:"attributionAgent"`
+	AgentID          string          `json:"agentId"`
+	ToolDenialKind   string          `json:"toolDenialKind"`
+	UserFeedback     json.RawMessage `json:"userFeedback"`
+	Attachment       json.RawMessage `json:"attachment"`
 }
 
 // ToolResult is the decoded toolUseResult payload. Fields are populated

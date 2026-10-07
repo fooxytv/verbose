@@ -250,3 +250,18 @@ func TestParseKeepsRedactedThinking(t *testing.T) {
 		t.Fatalf("redacted thinking dropped: %+v", sess.Events)
 	}
 }
+
+// Current Claude Code names the subagent tool "Agent"; it was "Task" when the
+// parser was written, and every real transcript on disk now says "Agent". A
+// switch that only knows "Task" silently reports zero subagents.
+func TestParseCountsAgentToolAsSubagentCall(t *testing.T) {
+	body := `{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T10:00:00.000Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"scan repo","subagent_type":"Explore"}}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`
+	sess, err := ParseSessionFile(writeTranscript(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Info.SubagentCalls != 1 {
+		t.Errorf("SubagentCalls = %d, want 1", sess.Info.SubagentCalls)
+	}
+}

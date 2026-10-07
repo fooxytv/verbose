@@ -140,4 +140,15 @@ var (
 				Foreground(colorBg).
 				Background(colorPurple).
 				Bold(true)
+
+	// Delete confirmation prompt
+	deletePromptStyle = lipgloss.NewStyle().
+				Foreground(colorBg).
+				Background(colorRed).
+				Bold(true)
+
+	// Warning that a delete cannot be undone
+	deleteWarnStyle = lipgloss.NewStyle().
+			Foreground(colorRed).
+			Bold(true)
 )
