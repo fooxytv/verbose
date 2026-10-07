@@ -303,7 +303,9 @@ func replayBody(step session.ReplayStep, sess *session.Session, width, typed int
 				if !ok {
 					break
 				}
-				lines = append(lines, "  "+truncateVisible(shown, width-6))
+				// Expand before truncating, or the cut is made against a width
+				// the terminal does not agree with.
+				lines = append(lines, "  "+truncateVisible(expandTabs(shown), width-6))
 			}
 			lines = append(lines, "")
 			if !rv.exhausted() {

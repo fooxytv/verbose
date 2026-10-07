@@ -427,14 +427,75 @@ func clampFrame(frame string, width, height int) string {
 	if height > 0 && len(rows) > height {
 		rows = rows[:height]
 	}
-	if width > 0 {
-		for i, r := range rows {
-			if visibleLen(r) > width {
-				rows[i] = truncateVisible(r, width)
-			}
+	w := usableWidth(width)
+	for i, r := range rows {
+		r = expandTabs(r)
+		if w > 0 && visibleLen(r) > w {
+			r = truncateVisible(r, w)
 		}
+		rows[i] = r
 	}
 	return strings.Join(rows, "\n")
+}
+
+// tabStop is how many columns a tab is expanded to. Terminals default to 8,
+// which wastes a lot of a narrow pane; what matters is that verbose and the
+// terminal agree, and they do because verbose expands tabs itself.
+const tabStop = 4
+
+// expandTabs replaces tabs with spaces to the next tab stop, counting only
+// visible characters so colour escapes do not shift the stops.
+//
+// This is not cosmetic. visibleLen counts a tab as one column but a terminal
+// draws it as up to eight, so every width measurement in this package is wrong
+// for code that is indented with tabs — which is most Go, Python and Makefile
+// code. Measured over real transcripts, a line measured as 94 columns drew as
+// 179: it wrapped, and every row below it was left stranded on screen. Once
+// tabs are gone, visibleLen is exact.
+func expandTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	col, inEsc := 0, false
+	for _, r := range s {
+		if r == 0x1b {
+			inEsc = true
+			b.WriteRune(r)
+			continue
+		}
+		if inEsc {
+			b.WriteRune(r)
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\t' {
+			n := tabStop - (col % tabStop)
+			b.WriteString(strings.Repeat(" ", n))
+			col += n
+			continue
+		}
+		b.WriteRune(r)
+		col++
+	}
+	return b.String()
+}
+
+// usableWidth is the last column a row may occupy: one short of the terminal.
+//
+// Filling the final column leaves the cursor in the terminal's pending-wrap
+// state at the right margin. The newline that follows then costs an extra row,
+// so the frame occupies more rows than the renderer believes and its cursor
+// arithmetic no longer matches the screen — rows are left behind, which reads
+// as code sticking on screen while the view scrolls underneath it. Never
+// writing to the last column avoids the state entirely.
+func usableWidth(width int) int {
+	if width <= 1 {
+		return width
+	}
+	return width - 1
 }
 
 // footer puts the keybindings on the left and the clock, the age of the open
@@ -451,19 +512,21 @@ func (m Model) footer(help string, keys []helpKey) string {
 	// terminal on its own; dropping the last few is better than wrapping onto
 	// a second row, which pushes the footer off the screen.
 	if help == "" {
-		help = renderHelpFit(keys, m.width-visibleLen(right))
+		help = renderHelpFit(keys, usableWidth(m.width)-visibleLen(right))
 	}
 
 	// Right-align by padding between the two. visibleLen is required because
 	// both sides carry colour escapes, and a line wider than the terminal
 	// wraps and pushes the footer off the screen.
-	gap := m.width - visibleLen(help) - visibleLen(right)
+	// One short of the terminal, so the footer never fills the last column.
+	w := usableWidth(m.width)
+	gap := w - visibleLen(help) - visibleLen(right)
 	if gap < 1 {
 		// No room for both: the keys matter more than the clock.
-		if visibleLen(help) <= m.width {
+		if visibleLen(help) <= w {
 			return help
 		}
-		return truncateVisible(help, m.width)
+		return truncateVisible(help, w)
 	}
 	return help + strings.Repeat(" ", gap) + right
 }

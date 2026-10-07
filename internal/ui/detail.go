@@ -940,7 +940,9 @@ func renderPatch(hunks []session.PatchHunk, width int) []string {
 		lines = append(lines, "  "+systemStyle.Render(fmt.Sprintf("@@ -%d,%d +%d,%d @@",
 			h.OldStart, h.OldLines, h.NewStart, h.NewLines)))
 		for _, l := range h.Lines {
-			l = truncateRunes(l, maxW)
+			// Tabs must go before the line is measured: a terminal draws one as
+			// up to eight columns, so a tabbed diff line overflows and wraps.
+			l = truncateRunes(expandTabs(l), maxW)
 			switch {
 			case strings.HasPrefix(l, "+"):
 				lines = append(lines, "  "+diffAddStyle.Render(l))

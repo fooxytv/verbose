@@ -539,8 +539,9 @@ func TestFooterFitsAndRightAligns(t *testing.T) {
 		keys := []helpKey{{"space", "play"}, {"→/←", "step"}, {"q", "quit"}}
 		got := m.footer("", keys)
 
-		if n := visibleLen(got); n > w {
-			t.Errorf("width %d: footer is %d wide\n  %q", w, n, stripAnsi(got))
+		if n := visibleLen(got); n >= w {
+			t.Errorf("width %d: footer occupies %d columns, want at most %d\n  %q",
+				w, n, w-1, stripAnsi(got))
 		}
 		// Where there is room, the status must actually be on the right.
 		if w >= 80 {
@@ -657,10 +658,13 @@ func TestViewNeverOverflowsTerminal(t *testing.T) {
 				t.Errorf("%s at %dx%d: %d rows, want at most %d",
 					mode.name, size.w, size.h, len(rows), size.h)
 			}
+			// Strictly less than the width: a row that fills the last
+			// column puts the terminal into pending-wrap and costs an extra
+			// row, which is what stranded rows on screen.
 			for i, row := range rows {
-				if n := visibleLen(row); n > size.w {
-					t.Errorf("%s at %dx%d: row %d is %d columns\n  %q",
-						mode.name, size.w, size.h, i, n, stripAnsi(row))
+				if n := terminalColumns(row); n >= size.w {
+					t.Errorf("%s at %dx%d: row %d draws %d columns, want at most %d\n  %q",
+						mode.name, size.w, size.h, i, n, size.w-1, stripAnsi(row))
 				}
 			}
 		}
@@ -697,5 +701,107 @@ func TestRenderHelpFitDropsFromTheEnd(t *testing.T) {
 	}
 	if got := renderHelpFit(nil, 80); got != "" {
 		t.Errorf("no keys should render nothing, got %q", got)
+	}
+}
+
+// terminalColumns counts the columns a terminal actually draws, expanding any
+// surviving tab to the terminal's own default stop of 8. visibleLen counts a
+// tab as one, so it cannot be used to check this.
+func terminalColumns(s string) int {
+	n, inEsc := 0, false
+	for _, r := range s {
+		if r == 0x1b {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\t' {
+			n += 8 - (n % 8)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+func TestExpandTabs(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"a\tb", "a   b"},        // to the next stop of 4
+		{"\tx", "    x"},         // a full stop from column 0
+		{"ab\tc", "ab  c"},       //
+		{"abcd\te", "abcd    e"}, // already on a stop: a whole one follows
+		{"no tabs here", "no tabs here"},
+	}
+	for _, c := range cases {
+		if got := expandTabs(c.in); got != c.want {
+			t.Errorf("expandTabs(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	// Colour escapes must not shift the stops: the visible text decides them.
+	coloured := "\x1b[31ma\x1b[0m\tb"
+	if got, want := expandTabs(coloured), "\x1b[31ma\x1b[0m   b"; got != want {
+		t.Errorf("expandTabs(coloured) = %q, want %q", got, want)
+	}
+}
+
+// The real invariant, measured the way a terminal measures: a tabbed line of
+// code must not draw past the edge. visibleLen counts a tab as one column
+// while a terminal draws it as up to eight, so code indented with tabs
+// overflowed and wrapped, stranding rows on screen — including while merely
+// scrolling a paused step.
+func TestViewNeverOverflowsWithTabbedCode(t *testing.T) {
+	code := "package main\n\nfunc main() {\n\tfor i := 0; i < 10; i++ {\n" +
+		"\t\tif x := compute(i); x > 0 {\n" +
+		"\t\t\tfmt.Println(\"a reasonably long line of output here\", i, x)\n" +
+		"\t\t}\n\t}\n}"
+	sess := &session.Session{
+		Info: session.SessionInfo{Title: "t", CWD: "/repo"},
+		Events: []session.Event{{
+			Type:     session.EventToolUse,
+			ToolName: "Write",
+			ToolInput: map[string]interface{}{
+				"file_path": "/repo/main.go", "content": code,
+			},
+			Result: &session.ToolResult{FilePath: "/repo/main.go"},
+		}, {
+			// The same shape through a diff, which renders by another path.
+			Type:      session.EventToolUse,
+			ToolName:  "Edit",
+			ToolInput: map[string]interface{}{"file_path": "/repo/b.go"},
+			Result: &session.ToolResult{FilePath: "/repo/b.go",
+				StructuredPatch: []session.PatchHunk{{Lines: []string{
+					"+\t\t\tif err := doSomethingWithAVeryLongName(ctx, x); err != nil {",
+					"-\t\t\treturn fmt.Errorf(\"wrapping an error message here: %w\", err)",
+					" \t\t\tcontext line with tabs",
+				}}}},
+		}},
+	}
+
+	m := Model{mode: viewReplay, version: "0.0.0", selectedSession: sess}
+	m.replaySteps = session.BuildReplay(sess)
+
+	for _, w := range []int{40, 60, 80, 100} {
+		for i := range m.replaySteps {
+			for _, typed := range []int{-1, 0, 11, 60} {
+				v := m
+				v.width, v.height = w, 20
+				v.replayIndex = i
+				v.replayTyped = typed
+				v.replayPlaying = typed >= 0
+
+				for n, row := range visibleLines(v.View()) {
+					if got := terminalColumns(row); got >= w {
+						t.Fatalf("width %d, step %d, typed %d: row %d draws %d columns\n  %q",
+							w, i, typed, n, got, stripAnsi(row))
+					}
+				}
+			}
+		}
 	}
 }
