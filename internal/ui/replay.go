@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,16 +118,24 @@ func renderReplay(v replayView) string {
 	if v.codeOnly {
 		header += "  " + agentStyle.Render("code only")
 	}
-	b.WriteString(header + "  " +
-		dimStyle.Render(truncate(sess.Info.Title, max(10, width-46))) + "\n")
+	b.WriteString(clampWidth(header+"  "+
+		dimStyle.Render(truncate(sess.Info.Title, max(10, width-46))), width) + "\n")
 
-	b.WriteString(replayProgress(v, idx, step, width) + "\n\n")
+	b.WriteString(clampWidth(replayProgress(v, idx, step, width), width) + "\n\n")
 
 	// The step itself.
-	b.WriteString(replayHeadline(step, sess, width) + "\n\n")
+	b.WriteString(clampWidth(replayHeadline(step, sess, width), width) + "\n\n")
 
 	body := replayBody(step, sess, width, typed)
-	visible := max(1, height-10)
+
+	// Rows this frame spends on everything that is not the body: the header,
+	// the progress bar, the headline, their blank lines, and the "more lines"
+	// note. The waiting notice costs three more when it is shown.
+	reserved := 9
+	if v.waiting {
+		reserved += 3
+	}
+	visible := max(1, height-reserved)
 
 	// While typing, the viewport follows the cursor. Without this the window
 	// stays at the top of the diff and the code arrives off-screen, which is
@@ -142,7 +151,7 @@ func renderReplay(v replayView) string {
 	}
 	end := min(len(body), scroll+visible)
 	for _, line := range body[scroll:end] {
-		b.WriteString(line + "\n")
+		b.WriteString(clampWidth(line, width) + "\n")
 	}
 	if end < len(body) {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  … %d more lines (↑/↓ to scroll)",
@@ -156,7 +165,24 @@ func renderReplay(v replayView) string {
 			"\n  " + mutedStyle.Render("new steps play as they are written"))
 	}
 
-	return b.String()
+	return clampHeight(b.String(), height-1)
+}
+
+// clampHeight drops any rows beyond what the view was given.
+//
+// padToHeight would trim them anyway when the frame is placed on screen; doing
+// it here keeps the renderer honest about its own budget, so a frame can never
+// claim more rows than it is allowed — including at terminal sizes too small
+// for everything to fit.
+func clampHeight(content string, rows int) string {
+	if rows <= 0 {
+		return content
+	}
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) <= rows {
+		return content
+	}
+	return strings.Join(lines[:rows], "\n")
 }
 
 // replayProgress is the position bar: a filled track, the step count, and the
@@ -301,7 +327,7 @@ func replayBody(step session.ReplayStep, sess *session.Session, width, typed int
 
 		if hunks := patchOf(e); len(hunks) > 0 {
 			lines = append(lines, "  "+headerLabelStyle.Render("The change")+" "+
-				mutedStyle.Render(changeSummary(e)))
+				mutedStyle.Render(changeSummary(e, sess.Info.CWD)))
 			lines = append(lines, "")
 			lines = append(lines, renderPatch(revealHunks(hunks, rv), width)...)
 			// Output is never typed out: a diff is worth following keystroke by
@@ -351,13 +377,16 @@ func patchOf(e session.Event) []session.PatchHunk {
 	return e.Result.StructuredPatch
 }
 
-// changeSummary is the churn headline that sits beside a diff.
-func changeSummary(e session.Event) string {
+// changeSummary is the churn headline that sits beside a diff. The path is
+// shortened against the session's directory: a full home-directory path is
+// wider than most terminals on its own.
+func changeSummary(e session.Event, cwd string) string {
 	if e.Result == nil {
 		return ""
 	}
 	added, removed := e.Result.Churn()
-	return fmt.Sprintf("+%d -%d in %s", added, removed, e.Result.FilePath)
+	return fmt.Sprintf("+%d -%d in %s", added, removed,
+		session.ShortPath(e.Result.FilePath, cwd))
 }
 
 // TypedLength is how many characters of a step get typed out. It is the budget
@@ -501,6 +530,20 @@ func replayKindStyles(k session.ReplayKind) (badge, body lipgloss.Style) {
 		return systemStyle.Copy().Reverse(true).Bold(true), systemStyle
 	}
 	return toolUseStyle.Copy().Reverse(true), toolUseStyle
+}
+
+// clampWidth is the last line of defence against a row wider than the terminal.
+//
+// A line that overflows is wrapped by the terminal into two rows, so the view
+// occupies more rows than padToHeight counted — the footer is pushed off the
+// bottom and the whole frame appears duplicated as the terminal scrolls. Every
+// producer here is supposed to fit already; this makes a mistake in one of them
+// a clipped line rather than a broken screen.
+func clampWidth(line string, width int) string {
+	if width <= 0 || visibleLen(line) <= width {
+		return line
+	}
+	return truncateVisible(line, width)
 }
 
 // wrapProse word-wraps a paragraph to the given width.
@@ -739,8 +782,70 @@ func (m Model) sessionInContext() *session.Session {
 	return nil
 }
 
+// handleReplayGotoKey consumes keys while the "go to step" prompt is open.
+// Nothing else may fire: a digit is part of the number being typed, not a
+// speed change or a restart.
+func (m Model) handleReplayGotoKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "ctrl+c":
+		m.replayGotoTyping = false
+		m.replayGotoDraft = ""
+		return m, nil
+
+	case "enter":
+		n, err := strconv.Atoi(m.replayGotoDraft)
+		m.replayGotoTyping = false
+		m.replayGotoDraft = ""
+		if err != nil || len(m.replaySteps) == 0 {
+			return m, nil
+		}
+		// Steps are numbered from 1 on screen.
+		m.replayIndex = clampInt(n-1, 0, len(m.replaySteps)-1)
+		m.replayScroll = 0
+		m.replayPlaying = false
+		m.replayTyped = -1
+		m.replayGen++
+		if n < 1 || n > len(m.replaySteps) {
+			m.statusMsg = fmt.Sprintf("Only %d steps — showing step %d",
+				len(m.replaySteps), m.replayIndex+1)
+			return m, clearStatusAfter()
+		}
+		return m, nil
+
+	case "backspace":
+		if r := []rune(m.replayGotoDraft); len(r) > 0 {
+			m.replayGotoDraft = string(r[:len(r)-1])
+		}
+		return m, nil
+
+	case "ctrl+u":
+		m.replayGotoDraft = ""
+		return m, nil
+	}
+
+	if msg.Type == tea.KeyRunes {
+		for _, r := range msg.Runes {
+			if r >= '0' && r <= '9' {
+				m.replayGotoDraft += string(r)
+			}
+		}
+	}
+	return m, nil
+}
+
+// replayGotoPrompt is the footer shown while a step number is being typed.
+func (m Model) replayGotoPrompt() string {
+	return searchPromptStyle.Render(" go to step ") + " " + m.replayGotoDraft +
+		mutedStyle.Render(fmt.Sprintf("█   of %d · enter to jump · esc to cancel",
+			len(m.replaySteps)))
+}
+
 // handleReplayKey consumes keys while the replay view is open.
 func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	if m.replayGotoTyping {
+		return m.handleReplayGotoKey(msg, key)
+	}
+
 	// Space is normalised to "enter" for selection elsewhere; here it is the
 	// play/pause control, so it has to be caught before that mapping applies.
 	if msg.Type == tea.KeySpace || key == "enter" {
@@ -834,6 +939,15 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 	case "G", "end":
 		m.replayIndex = max(0, len(m.replaySteps)-1)
 		m.replayScroll = 0
+		m.replayPlaying = false
+		m.replayTyped = -1
+		m.replayGen++
+		return m, nil
+
+	case "/":
+		// Jump straight to a step by number, the way "/24" reads.
+		m.replayGotoTyping = true
+		m.replayGotoDraft = ""
 		m.replayPlaying = false
 		m.replayTyped = -1
 		m.replayGen++

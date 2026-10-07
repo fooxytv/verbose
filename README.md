@@ -130,6 +130,7 @@ In the replay view:
 | `Left` | Previous step |
 | `Up` / `Down` | Scroll — takes manual control and pauses |
 | `+` / `-` | Faster / slower (0.5s to 15s per step) |
+| `/` | Go to a step by number — type `24`, press enter |
 | `Tab` | Code only — just the steps that wrote something |
 | `f` | Follow a running session (on by default) |
 | `0` | Back to the first step |
@@ -187,9 +188,10 @@ re-render regardless of size.
 
 ### Following a live session
 
-Replay follows a session that is still being written. When it reaches the last
-recorded step and the transcript is still growing, it holds — `◴ live` — and
-plays new steps as they arrive. It reads at human speed while the agent works
+Replay follows a session that is still being written. The step count updates on
+its own as the transcript grows — `300/300` becomes `300/312` without any
+keypress — and when playback reaches the last recorded step it holds, `◴ live`,
+then plays the new ones as they arrive. It reads at human speed while the agent works
 at its own, so it falls behind; the gap is shown as `N behind` rather than
 skipped. `f` turns following off.
 

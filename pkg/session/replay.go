@@ -499,6 +499,10 @@ func codeLabel(path, cwd string) string {
 	return relPath(path, cwd)
 }
 
+// ShortPath is relPath for callers outside this package: it shortens a path
+// against the session's directory for display.
+func ShortPath(path, cwd string) string { return relPath(path, cwd) }
+
 // relPath shortens a path against the session's working directory, so a step
 // reads as "storage.tf" rather than a full home-directory path.
 func relPath(path, cwd string) string {

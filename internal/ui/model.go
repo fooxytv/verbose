@@ -74,6 +74,9 @@ type Model struct {
 	replayLive bool
 	// replayCodeOnly narrows the step list to the steps that wrote code.
 	replayCodeOnly bool
+	// A step number being typed at the "/" prompt, as in "/24".
+	replayGotoTyping bool
+	replayGotoDraft  string
 	// replayGen invalidates ticks scheduled before a pause, a manual step or a
 	// speed change. Without it a stale tick would advance a second step.
 	replayGen int
@@ -338,6 +341,10 @@ func (m Model) View() string {
 		if m.replayPlaying {
 			playLabel = "pause"
 		}
+		if m.replayGotoTyping {
+			help = m.replayGotoPrompt()
+			break
+		}
 		liveLabel := "live"
 		if m.replayLive {
 			liveLabel = "live ●"
@@ -347,6 +354,7 @@ func (m Model) View() string {
 			{"→/←", "step"},
 			{"↑/↓", "scroll"},
 			{"+/-", "speed"},
+			{"/", "go to step"},
 			{"0", "restart"},
 			{"tab", "code only"},
 			{"f", liveLabel},

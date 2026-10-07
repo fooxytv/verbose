@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fooxytv/verbose/pkg/session"
 )
 
@@ -270,5 +272,256 @@ func TestRenderReplayEmptyCodeOnlyExplainsTheFilter(t *testing.T) {
 	}
 	if !strings.Contains(out, "tab") {
 		t.Error("the way out of the filter should be stated")
+	}
+}
+
+// visibleLines counts rows the way padToHeight does, which is what decides
+// whether the footer stays on screen.
+func visibleLines(s string) []string {
+	return strings.Split(strings.TrimRight(s, "\n"), "\n")
+}
+
+// A line wider than the terminal is wrapped into two rows, so the frame occupies
+// more rows than padToHeight counted: the footer is pushed off the bottom and
+// the screen appears to duplicate as the terminal scrolls. Nothing this renderer
+// emits may exceed the width it was given.
+func TestRenderReplayNeverExceedsTerminalWidth(t *testing.T) {
+	long := "/Users/someone/workspace/a-very-long-project-name/src/deeply/nested/module.go"
+	hunk := session.PatchHunk{OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 2,
+		Lines: []string{" " + strings.Repeat("ctx", 60), "+" + strings.Repeat("add", 60)}}
+
+	sess := &session.Session{
+		Info: session.SessionInfo{
+			Title: strings.Repeat("a long session title ", 10),
+			CWD:   "/nowhere",
+		},
+		Events: []session.Event{
+			{Type: session.EventUserPrompt, UserText: strings.Repeat("word ", 200)},
+			// A diff whose file lives outside the session directory: the path
+			// cannot be shortened away, so the summary line must be clipped.
+			{Type: session.EventToolUse, ToolName: "Edit",
+				ToolInput: map[string]interface{}{"file_path": long},
+				Result: &session.ToolResult{FilePath: long,
+					StructuredPatch: []session.PatchHunk{hunk}}},
+			{Type: session.EventToolUse, ToolName: "Bash",
+				ToolInput: map[string]interface{}{"command": "cat > " + long +
+					" <<'EOF'\n" + strings.Repeat("x", 300) + "\nEOF"},
+				Result: &session.ToolResult{Stdout: strings.Repeat("out ", 300)}},
+			// A subagent step carries an extra mark and a time offset beside an
+			// already-long title.
+			{Type: session.EventToolUse, ToolName: "Grep", IsSidechain: true,
+				ToolInput: map[string]interface{}{"pattern": strings.Repeat("p", 200)}},
+		},
+	}
+	steps := session.BuildReplay(sess)
+
+	for _, w := range []int{40, 60, 80, 120} {
+		for i := range steps {
+			for _, typed := range []int{-1, 0, 7, TypedLength(steps[i], sess)} {
+				for _, waiting := range []bool{false, true} {
+					out := renderReplay(replayView{sess: sess, steps: steps, idx: i,
+						typed: typed, playing: true, waiting: waiting, codeOnly: true,
+						delay: replayDefaultDelay, width: w, height: 24})
+					for n, line := range visibleLines(out) {
+						if got := visibleLen(line); got > w {
+							t.Fatalf("width %d, step %d, typed %d: row %d is %d wide\n  %q",
+								w, i, typed, n, got, stripAnsi(line))
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// The frame must also fit the rows it was given, or padToHeight silently trims
+// content that was meant to be read.
+func TestRenderReplayFitsTerminalHeight(t *testing.T) {
+	var lines []string
+	for i := 0; i < 400; i++ {
+		lines = append(lines, "+line of code")
+	}
+	sess := &session.Session{
+		Info: session.SessionInfo{Title: "t", CWD: "/repo"},
+		Events: []session.Event{{
+			Type: session.EventToolUse, ToolName: "Edit",
+			ToolInput: map[string]interface{}{"file_path": "/repo/a.go"},
+			Result: &session.ToolResult{FilePath: "/repo/a.go",
+				StructuredPatch: []session.PatchHunk{{Lines: lines}}},
+		}},
+	}
+	steps := session.BuildReplay(sess)
+
+	for _, h := range []int{10, 24, 40} {
+		for _, waiting := range []bool{false, true} {
+			out := renderReplay(replayView{sess: sess, steps: steps, idx: 0, typed: -1,
+				playing: true, waiting: waiting, delay: replayDefaultDelay,
+				width: 80, height: h})
+			if n := len(visibleLines(out)); n > h-1 {
+				t.Errorf("height %d (waiting=%v): frame is %d rows, want at most %d",
+					h, waiting, n, h-1)
+			}
+		}
+	}
+}
+
+// key builds the KeyMsg the model expects for a run of characters.
+func runeKey(s string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func namedKey(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+
+// typeGoto feeds a string to the "go to step" prompt and returns the model.
+func typeGoto(m Model, digits string) Model {
+	for _, r := range digits {
+		mm, _ := m.handleReplayGotoKey(runeKey(string(r)), string(r))
+		m = mm.(Model)
+	}
+	return m
+}
+
+func replayModelWithSteps(n int) Model {
+	var events []session.Event
+	for i := 0; i < n; i++ {
+		events = append(events, session.Event{
+			Type: session.EventToolUse, ToolName: "Bash",
+			ToolInput: map[string]interface{}{"command": "echo " + strconv.Itoa(i)},
+		})
+	}
+	sess := &session.Session{Info: session.SessionInfo{Title: "t"}, Events: events}
+	m := Model{selectedSession: sess, mode: viewReplay, replayDelay: replayDefaultDelay}
+	m.replaySteps = session.BuildReplay(sess)
+	return m
+}
+
+func TestReplayGotoJumpsToStepNumber(t *testing.T) {
+	m := replayModelWithSteps(50)
+	m.replayGotoTyping = true
+	m.replayPlaying = true
+
+	m = typeGoto(m, "24")
+	if m.replayGotoDraft != "24" {
+		t.Fatalf("draft = %q, want %q", m.replayGotoDraft, "24")
+	}
+
+	res, _ := m.handleReplayGotoKey(namedKey(tea.KeyEnter), "enter")
+	m = res.(Model)
+
+	// Steps are numbered from 1 on screen, so "24" is index 23.
+	if m.replayIndex != 23 {
+		t.Errorf("replayIndex = %d, want 23", m.replayIndex)
+	}
+	if m.replayGotoTyping {
+		t.Error("prompt should close after jumping")
+	}
+	if m.replayPlaying {
+		t.Error("jumping is a deliberate look, so playback should pause")
+	}
+	if m.replayTyped != -1 {
+		t.Error("the step jumped to should be fully revealed")
+	}
+}
+
+func TestReplayGotoClampsAndReportsOutOfRange(t *testing.T) {
+	m := replayModelWithSteps(10)
+	m.replayGotoTyping = true
+
+	m = typeGoto(m, "999")
+	res, _ := m.handleReplayGotoKey(namedKey(tea.KeyEnter), "enter")
+	m = res.(Model)
+
+	if m.replayIndex != 9 {
+		t.Errorf("replayIndex = %d, want 9 (the last step)", m.replayIndex)
+	}
+	if !strings.Contains(m.statusMsg, "Only 10 steps") {
+		t.Errorf("statusMsg = %q, want it to say how many steps there are", m.statusMsg)
+	}
+}
+
+func TestReplayGotoIgnoresNonDigitsAndCancels(t *testing.T) {
+	m := replayModelWithSteps(10)
+	m.replayGotoTyping = true
+
+	m = typeGoto(m, "1a2z")
+	if m.replayGotoDraft != "12" {
+		t.Errorf("draft = %q, want %q: letters are not part of a step number",
+			m.replayGotoDraft, "12")
+	}
+
+	res, _ := m.handleReplayGotoKey(namedKey(tea.KeyEsc), "esc")
+	m = res.(Model)
+	if m.replayGotoTyping || m.replayGotoDraft != "" {
+		t.Error("esc should close the prompt and discard what was typed")
+	}
+	if m.replayIndex != 0 {
+		t.Error("cancelling must not move the reader")
+	}
+}
+
+// Following a live session: the transcript grows, the total goes up, and the
+// reader stays on the step they were reading.
+//
+// The index alone cannot do this. linkSubagents splices a subagent's turns into
+// the MIDDLE of its parent timeline, so a new background agent shifts every
+// index after it — anchoring on the number would silently jump the reader.
+func TestRebuildReplayKeepsPositionWhenEarlierStepsAppear(t *testing.T) {
+	mk := func(uuid, cmd string) session.Event {
+		return session.Event{Type: session.EventToolUse, ToolName: "Bash", UUID: uuid,
+			ToolInput: map[string]interface{}{"command": cmd}}
+	}
+
+	before := &session.Session{Events: []session.Event{
+		mk("a", "one"), mk("b", "two"), mk("c", "three"),
+	}}
+	m := Model{selectedSession: before, mode: viewReplay}
+	m.replaySteps = session.BuildReplay(before)
+	m.replayIndex = 2 // reading "three"
+
+	anchor := m.replayStepUUID()
+	if anchor != "c" {
+		t.Fatalf("anchor = %q, want %q", anchor, "c")
+	}
+
+	// A subagent run splices in ahead of the reader, and the session grows.
+	after := &session.Session{Events: []session.Event{
+		mk("a", "one"), mk("x", "sub-1"), mk("y", "sub-2"), mk("b", "two"),
+		mk("c", "three"), mk("d", "four"),
+	}}
+	m.selectedSession = after
+	m.rebuildReplay(anchor)
+
+	if len(m.replaySteps) != 6 {
+		t.Fatalf("got %d steps, want 6", len(m.replaySteps))
+	}
+	if m.replayIndex != 4 {
+		t.Errorf("replayIndex = %d, want 4: the reader should still be on \"three\"", m.replayIndex)
+	}
+	if got := m.replayStepUUID(); got != "c" {
+		t.Errorf("anchor after rebuild = %q, want %q", got, "c")
+	}
+}
+
+// OpenCode events carry no UUID, but their order is fixed when the database is
+// parsed, so the index is the right fallback there.
+func TestRebuildReplayFallsBackToIndexWithoutUUIDs(t *testing.T) {
+	mk := func(cmd string) session.Event {
+		return session.Event{Type: session.EventToolUse, ToolName: "Bash",
+			ToolInput: map[string]interface{}{"command": cmd}}
+	}
+	sess := &session.Session{Events: []session.Event{mk("one"), mk("two"), mk("three")}}
+	m := Model{selectedSession: sess, mode: viewReplay}
+	m.replaySteps = session.BuildReplay(sess)
+	m.replayIndex = 1
+
+	grown := &session.Session{Events: append(sess.Events, mk("four"), mk("five"))}
+	m.selectedSession = grown
+	m.rebuildReplay("")
+
+	if len(m.replaySteps) != 5 {
+		t.Fatalf("got %d steps, want 5", len(m.replaySteps))
+	}
+	if m.replayIndex != 1 {
+		t.Errorf("replayIndex = %d, want 1 (held by index)", m.replayIndex)
 	}
 }
