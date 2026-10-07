@@ -139,6 +139,10 @@ In the replay view:
 
 Mouse scroll is also supported in all views.
 
+The footer's right-hand side shows how long ago the open session was written,
+the time now, and the version — so a live session visibly ticking apart from
+one that stopped four minutes ago.
+
 ## Replay
 
 Agents work faster than anyone can read. Replay gives one operation the whole

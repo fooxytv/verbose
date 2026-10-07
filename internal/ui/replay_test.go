@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fooxytv/verbose/pkg/session"
@@ -523,5 +524,178 @@ func TestRebuildReplayFallsBackToIndexWithoutUUIDs(t *testing.T) {
 	}
 	if m.replayIndex != 1 {
 		t.Errorf("replayIndex = %d, want 1 (held by index)", m.replayIndex)
+	}
+}
+
+// The footer shares one row with the keybindings, and a row wider than the
+// terminal wraps and pushes the footer off the screen entirely.
+func TestFooterFitsAndRightAligns(t *testing.T) {
+	sess := &session.Session{Info: session.SessionInfo{
+		Title: "t", LastUpdate: time.Now().Add(-90 * time.Second),
+	}}
+
+	for _, w := range []int{20, 40, 80, 120, 200} {
+		m := Model{width: w, version: "0.12.2", selectedSession: sess}
+		keys := []helpKey{{"space", "play"}, {"→/←", "step"}, {"q", "quit"}}
+		got := m.footer("", keys)
+
+		if n := visibleLen(got); n > w {
+			t.Errorf("width %d: footer is %d wide\n  %q", w, n, stripAnsi(got))
+		}
+		// Where there is room, the status must actually be on the right.
+		if w >= 80 {
+			plain := stripAnsi(got)
+			if !strings.Contains(plain, "1m ago") {
+				t.Errorf("width %d: footer lost the session age: %q", w, plain)
+			}
+			if !strings.HasSuffix(strings.TrimRight(plain, " "), "v0.12.2") {
+				t.Errorf("width %d: version should end the row: %q", w, plain)
+			}
+		}
+	}
+}
+
+// With no session open there is no age to show, but the clock and version stay.
+func TestFooterWithoutSession(t *testing.T) {
+	m := Model{width: 80, version: "1.2.3"}
+	plain := stripAnsi(m.footer("", []helpKey{{"q", "quit"}}))
+	if strings.Contains(plain, "updated") {
+		t.Errorf("no session open, so nothing was updated: %q", plain)
+	}
+	if !strings.Contains(plain, "v1.2.3") {
+		t.Errorf("version missing: %q", plain)
+	}
+}
+
+func TestAgoShort(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{-time.Second, "0s ago"},
+		{5 * time.Second, "5s ago"},
+		{90 * time.Second, "1m ago"},
+		{3 * time.Hour, "3h ago"},
+		{50 * time.Hour, "2d ago"},
+	}
+	for _, c := range cases {
+		if got := agoShort(c.d); got != c.want {
+			t.Errorf("agoShort(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+// The whole-view invariant, which is what actually decides whether the screen
+// stays intact: no row wider than the terminal, and no more rows than it has.
+//
+// A row that overflows is wrapped by the terminal into two, so the frame takes
+// more rows than it claims. The terminal then scrolls, and because the renderer
+// positions the cursor on the assumption that it did not, rows are left behind
+// — the header and footer appear twice, and a line of code being typed appears
+// repeated down the screen.
+//
+// The footer was the real offender: the sessions help line is 129 columns, so it
+// wrapped on any terminal narrower than that.
+func TestViewNeverOverflowsTerminal(t *testing.T) {
+	m, _ := deleteFixture(t)
+	sess := m.store.GetSession(m.sessions[0].ID)
+	if sess == nil {
+		t.Skip("fixture has no parseable session")
+	}
+
+	modes := []struct {
+		name  string
+		setup func(m Model) Model
+	}{
+		{"sessions", func(m Model) Model { m.mode = viewSessions; return m }},
+		{"detail", func(m Model) Model {
+			m.mode = viewDetail
+			m.selectedSession = sess
+			return m
+		}},
+		{"overview", func(m Model) Model {
+			m.mode = viewOverview
+			m.selectedSession = sess
+			return m
+		}},
+		{"replay", func(m Model) Model {
+			m.startReplay(sess)
+			m.replayPlaying = true
+			m.replayTyped = 20
+			return m
+		}},
+		{"replay typing mid-step", func(m Model) Model {
+			m.startReplay(sess)
+			m.replayPlaying = true
+			if len(m.replaySteps) > 1 {
+				m.replayIndex = 1
+			}
+			m.replayTyped = 3
+			return m
+		}},
+		{"replay goto prompt", func(m Model) Model {
+			m.startReplay(sess)
+			m.replayGotoTyping = true
+			m.replayGotoDraft = "123"
+			return m
+		}},
+		{"status message", func(m Model) Model {
+			m.mode = viewSessions
+			m.statusMsg = "Moved to Trash: a-fairly-long-transcript-file-name.jsonl"
+			return m
+		}},
+	}
+
+	for _, size := range []struct{ w, h int }{{40, 12}, {80, 24}, {100, 30}, {120, 40}, {200, 50}} {
+		for _, mode := range modes {
+			v := mode.setup(m)
+			v.width, v.height = size.w, size.h
+			out := v.View()
+
+			rows := visibleLines(out)
+			if len(rows) > size.h {
+				t.Errorf("%s at %dx%d: %d rows, want at most %d",
+					mode.name, size.w, size.h, len(rows), size.h)
+			}
+			for i, row := range rows {
+				if n := visibleLen(row); n > size.w {
+					t.Errorf("%s at %dx%d: row %d is %d columns\n  %q",
+						mode.name, size.w, size.h, i, n, stripAnsi(row))
+				}
+			}
+		}
+	}
+}
+
+// Dropping keys is preferable to wrapping, but the first ones must survive and
+// the omission must be visible.
+func TestRenderHelpFitDropsFromTheEnd(t *testing.T) {
+	keys := []helpKey{
+		{"a", "first"}, {"b", "second"}, {"c", "third"}, {"d", "fourth"},
+	}
+	full := renderHelp(keys)
+
+	if got := renderHelpFit(keys, visibleLen(full)); got != full {
+		t.Error("with room for everything, nothing should be dropped")
+	}
+
+	narrow := renderHelpFit(keys, 30)
+	if n := visibleLen(narrow); n > 30 {
+		t.Errorf("fitted help is %d columns, want at most 30", n)
+	}
+	plain := stripAnsi(narrow)
+	if !strings.Contains(plain, "a first") {
+		t.Errorf("the first key must survive: %q", plain)
+	}
+	if !strings.Contains(plain, "…") {
+		t.Errorf("a dropped key must be marked: %q", plain)
+	}
+
+	// Absurdly narrow: still must not exceed the width.
+	if n := visibleLen(renderHelpFit(keys, 4)); n > 4 {
+		t.Errorf("help is %d columns at width 4", n)
+	}
+	if got := renderHelpFit(nil, 80); got != "" {
+		t.Errorf("no keys should render nothing, got %q", got)
 	}
 }

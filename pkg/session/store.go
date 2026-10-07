@@ -112,7 +112,12 @@ func (s *Store) Scan() error {
 // The subagent also stays in the session list in its own right: it is useful to
 // see what one run cost. Only its events are copied, never its tokens or cost,
 // so a project total still counts them exactly once.
-func (s *Store) linkSubagents() {
+func (s *Store) linkSubagents() { s.linkSubagentsOf("") }
+
+// linkSubagentsOf splices subagent runs into their parents. With a parent id it
+// rebuilds just that one timeline, which is what a single file changing needs;
+// with an empty id it does every parent, which is what a full scan needs.
+func (s *Store) linkSubagentsOf(only string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -120,9 +125,18 @@ func (s *Store) linkSubagents() {
 	children := make(map[string][]*Session)
 	for _, sess := range s.sessions {
 		if sess.Info.IsAgent && sess.Info.ParentSessionID != "" {
+			if only != "" && sess.Info.ParentSessionID != only {
+				continue
+			}
 			children[sess.Info.ParentSessionID] = append(
 				children[sess.Info.ParentSessionID], sess)
 		}
+	}
+
+	// Splice in a stable order, so a parent's timeline does not depend on map
+	// iteration order from one reload to the next.
+	for _, kids := range children {
+		sort.Slice(kids, func(i, j int) bool { return kids[i].Info.ID < kids[j].Info.ID })
 	}
 
 	for parentID, kids := range children {
@@ -234,6 +248,54 @@ func (s *Store) scanSubagents(sessionDir string) {
 	}
 }
 
+// reload re-parses one transcript after it changed, and restores the subagent
+// links that a fresh parse drops.
+//
+// A parsed file holds only its own events, so re-parsing a parent throws away
+// the subagent turns that were spliced into it, and re-parsing a subagent
+// leaves its parent holding a stale copy. Either way the affected parent is
+// rebuilt from disk and all of its children are spliced in again, which is
+// cheap — one parent and its agents — and idempotent.
+func (s *Store) reload(path string) {
+	sess, err := ParseSessionFile(path)
+	if err != nil || len(sess.Events) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	s.sessions[sess.Info.ID] = sess
+
+	// Which timeline this change belongs to: a subagent's events live in its
+	// parent's, so that is the one to rebuild.
+	parentID := sess.Info.ID
+	parentPath := path
+	if sess.Info.IsAgent && sess.Info.ParentSessionID != "" {
+		parentID = sess.Info.ParentSessionID
+		if p := s.sessions[parentID]; p != nil {
+			parentPath = p.Info.FilePath
+		}
+	}
+	s.mu.Unlock()
+
+	// Re-parse the parent so it starts from a clean timeline. If it has gone
+	// from disk, the subagent still stands on its own.
+	if parentPath != path {
+		if parent, err := ParseSessionFile(parentPath); err == nil && len(parent.Events) > 0 {
+			s.mu.Lock()
+			s.sessions[parent.Info.ID] = parent
+			s.mu.Unlock()
+		}
+	}
+
+	s.linkSubagentsOf(parentID)
+
+	// Signal update (non-blocking)
+	select {
+	case s.updates <- struct{}{}:
+	default:
+	}
+}
+
 // load parses one transcript into the store, ignoring files that fail to parse
 // or carry no events.
 func (s *Store) load(path string) {
@@ -293,12 +355,28 @@ func (s *Store) scanOpenCodeDBs() {
 	}
 }
 
+// How long to wait after a write before re-parsing, and the longest a file may
+// stay dirty while being written to continuously. Without the second bound, an
+// agent that writes more often than the debounce interval would never trigger a
+// reload at all.
+const (
+	watchDebounce = 500 * time.Millisecond
+	watchMaxDelay = 2 * time.Second
+)
+
 // Watch starts watching for file changes and re-parses modified sessions.
 // Returns a channel that receives a signal whenever sessions are updated.
 func (s *Store) Watch() <-chan struct{} {
 	go func() {
-		// Debounce timer to avoid re-parsing on every write
-		var debounce *time.Timer
+		// One debounce timer PER FILE. A single shared timer meant a write to
+		// any transcript cancelled the pending re-parse of another, so with two
+		// sessions being written at once — or an agent writing its own file
+		// beside its parent's — only the last one to be touched ever reloaded.
+		debounce := make(map[string]*time.Timer)
+		// When a file was first seen dirty, so that sustained writing cannot
+		// postpone its reload indefinitely.
+		firstDirty := make(map[string]time.Time)
+		var mu sync.Mutex
 
 		for {
 			select {
@@ -313,26 +391,33 @@ func (s *Store) Watch() <-chan struct{} {
 					continue
 				}
 
-				// Debounce: wait 500ms after last write before re-parsing
-				if debounce != nil {
-					debounce.Stop()
-				}
 				path := event.Name
-				debounce = time.AfterFunc(500*time.Millisecond, func() {
-					sess, err := ParseSessionFile(path)
-					if err != nil || len(sess.Events) == 0 {
-						return
-					}
-					s.mu.Lock()
-					s.sessions[sess.Info.ID] = sess
-					s.mu.Unlock()
-
-					// Signal update (non-blocking)
-					select {
-					case s.updates <- struct{}{}:
-					default:
-					}
-				})
+				mu.Lock()
+				if _, seen := firstDirty[path]; !seen {
+					firstDirty[path] = time.Now()
+				}
+				// An agent writing steadily resets the timer on every line, so
+				// a pure "quiet for 500ms" rule can starve: reload anyway once
+				// the file has been dirty for watchMaxDelay.
+				waited := time.Since(firstDirty[path])
+				if t := debounce[path]; t != nil && waited < watchMaxDelay {
+					t.Stop()
+				}
+				if waited < watchMaxDelay {
+					debounce[path] = time.AfterFunc(watchDebounce, func() {
+						mu.Lock()
+						delete(firstDirty, path)
+						delete(debounce, path)
+						mu.Unlock()
+						s.reload(path)
+					})
+					mu.Unlock()
+					continue
+				}
+				delete(firstDirty, path)
+				delete(debounce, path)
+				mu.Unlock()
+				s.reload(path)
 
 			case _, ok := <-s.watcher.Errors:
 				if !ok {

@@ -230,3 +230,107 @@ func TestSplicingFallsBackToChronology(t *testing.T) {
 		t.Fatalf("subagent turn at index %d, want 1 (between the two parent turns)", at)
 	}
 }
+
+// A live session reloads when its file grows. A fresh parse holds only its own
+// events, so without re-linking, the subagent turns that had been spliced in
+// would vanish from the parent the moment anything was appended to it.
+func TestReloadKeepsSubagentTurnsSpliced(t *testing.T) {
+	base := t.TempDir()
+	writeSpliceFixture(t, base)
+	store := scanned(t, base)
+
+	parentPath := filepath.Join(base, "-Users-me-work-infra", "sess-1.jsonl")
+	before := store.GetSession("sess-1")
+	if before == nil {
+		t.Fatal("parent not in the store")
+	}
+	sideBefore := countSidechain(before)
+	if sideBefore == 0 {
+		t.Fatal("fixture should have spliced subagent turns")
+	}
+
+	// The agent keeps working: another line is appended to the parent.
+	f, err := os.OpenFile(parentPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"type":"assistant","uuid":"a3","sessionId":"sess-1",` +
+		`"timestamp":"2026-10-01T12:10:00Z","message":{"role":"assistant",` +
+		`"model":"claude-opus-5","content":[{"type":"text","text":"and more"}]}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	store.reload(parentPath)
+
+	after := store.GetSession("sess-1")
+	if after == nil {
+		t.Fatal("parent gone after reload")
+	}
+	if got := countSidechain(after); got != sideBefore {
+		t.Errorf("sidechain events after reload = %d, want %d — the subagent's "+
+			"turns were dropped", got, sideBefore)
+	}
+	if len(after.Events) <= len(before.Events) {
+		t.Errorf("events after reload = %d, want more than %d: the appended line "+
+			"should be there too", len(after.Events), len(before.Events))
+	}
+}
+
+// Reloading the same file twice must not splice the subagent in twice.
+func TestReloadIsIdempotent(t *testing.T) {
+	base := t.TempDir()
+	writeSpliceFixture(t, base)
+	store := scanned(t, base)
+	parentPath := filepath.Join(base, "-Users-me-work-infra", "sess-1.jsonl")
+
+	store.reload(parentPath)
+	first := len(store.GetSession("sess-1").Events)
+	store.reload(parentPath)
+	store.reload(parentPath)
+	if got := len(store.GetSession("sess-1").Events); got != first {
+		t.Errorf("events = %d after repeated reloads, want %d", got, first)
+	}
+}
+
+// A subagent's own file growing has to show up in its parent's timeline too.
+func TestReloadOfSubagentUpdatesParent(t *testing.T) {
+	base := t.TempDir()
+	writeSpliceFixture(t, base)
+	store := scanned(t, base)
+
+	agentPath := filepath.Join(base, "-Users-me-work-infra", "sess-1",
+		"subagents", "agent-abc123def4567890.jsonl")
+	before := countSidechain(store.GetSession("sess-1"))
+
+	f, err := os.OpenFile(agentPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"type":"assistant","uuid":"s3","sessionId":"sess-1",` +
+		`"isSidechain":true,"attributionAgent":"scout","timestamp":"2026-10-01T12:03:00Z",` +
+		`"message":{"role":"assistant","model":"claude-haiku-4-5","content":[{"type":"tool_use",` +
+		`"id":"toolu_Z","name":"Grep","input":{"pattern":"aws_"}}]}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	store.reload(agentPath)
+
+	if got := countSidechain(store.GetSession("sess-1")); got != before+1 {
+		t.Errorf("sidechain events in parent = %d, want %d: the subagent's new "+
+			"turn never reached its parent", got, before+1)
+	}
+}
+
+func countSidechain(s *Session) int {
+	n := 0
+	for i := range s.Events {
+		if s.Events[i].IsSidechain {
+			n++
+		}
+	}
+	return n
+}

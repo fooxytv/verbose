@@ -27,6 +27,14 @@ type sessionsUpdatedMsg struct{}
 // statusClearMsg clears the transient status message.
 type statusClearMsg struct{}
 
+// clockTickMsg redraws once a second so the footer clock and the "updated N ago"
+// age stay truthful while nothing else is happening.
+type clockTickMsg struct{}
+
+func clockTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return clockTickMsg{} })
+}
+
 // Model is the main bubbletea model.
 type Model struct {
 	store   *session.Store
@@ -124,6 +132,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadSessions,
 		m.watchForUpdates,
+		clockTickCmd(),
 	)
 }
 
@@ -229,6 +238,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.replayTyped = 0
 		return m, m.replayAdvanceCmd()
 
+	case clockTickMsg:
+		// The view reads the wall clock directly; the tick only forces a redraw.
+		return m, clockTickCmd()
+
 	case statusClearMsg:
 		m.statusMsg = ""
 		return m, nil
@@ -243,12 +256,16 @@ func (m Model) View() string {
 	}
 
 	var content string
+	// help is an explicit footer override (a prompt or a status line);
+	// helpKeys is the normal keybinding list, which the footer fits to the
+	// width it has.
 	var help string
+	var helpKeys []helpKey
 
 	switch m.mode {
 	case viewSessions:
 		content = renderSessionsList(m.sessions, m.cursor, m.width, m.height)
-		help = renderHelp([]helpKey{
+		helpKeys = []helpKey{
 			{"↑/↓", "navigate"},
 			{"→/enter/space", "open"},
 			{"s", "summary"},
@@ -261,7 +278,7 @@ func (m Model) View() string {
 			{"d", "delete"},
 			{"r", "refresh"},
 			{"q", "quit"},
-		})
+		}
 
 	case viewDetail:
 		if m.selectedSession != nil {
@@ -279,7 +296,7 @@ func (m Model) View() string {
 		if m.autoFollow {
 			followLabel = "follow ●"
 		}
-		help = renderHelp([]helpKey{
+		helpKeys = []helpKey{
 			{"↑/↓", "navigate"},
 			{"→/enter", "expand"},
 			{"←", "back"},
@@ -292,7 +309,7 @@ func (m Model) View() string {
 			{"d", "delete"},
 			{"f", followLabel},
 			{"q", "quit"},
-		})
+		}
 
 	case viewOverview:
 		if m.selectedSession != nil {
@@ -303,23 +320,23 @@ func (m Model) View() string {
 			}
 			content = renderSessionOverview(m.selectedSession, m.sessionTodos, hasMemory, m.overviewScroll, m.width, m.height)
 		}
-		help = renderHelp([]helpKey{
+		helpKeys = []helpKey{
 			{"↑/↓", "scroll"},
 			{"←/esc", "back"},
 			{"p", "project"},
 			{"d", "delete"},
 			{"q", "quit"},
-		})
+		}
 
 	case viewEvent:
 		if m.selectedEvent != nil {
 			content = renderEventDetail(*m.selectedEvent, m.eventScroll, m.width, m.height)
 		}
-		help = renderHelp([]helpKey{
+		helpKeys = []helpKey{
 			{"↑/↓", "scroll"},
 			{"←", "back"},
 			{"q", "quit"},
-		})
+		}
 
 	case viewReplay:
 		if m.selectedSession != nil {
@@ -349,7 +366,7 @@ func (m Model) View() string {
 		if m.replayLive {
 			liveLabel = "live ●"
 		}
-		help = renderHelp([]helpKey{
+		helpKeys = []helpKey{
 			{"space", playLabel},
 			{"→/←", "step"},
 			{"↑/↓", "scroll"},
@@ -361,13 +378,13 @@ func (m Model) View() string {
 			{"t", "timeline"},
 			{"esc", "back"},
 			{"q", "quit"},
-		})
+		}
 
 	case viewProject:
 		if m.selectedProject != nil {
 			content = renderProjectView(m.selectedProject, m.projectScroll, m.projectCursor, m.width, m.height)
 		}
-		help = renderHelp([]helpKey{
+		helpKeys = []helpKey{
 			{"↑/↓", "scroll"},
 			{"tab", "select session"},
 			{"enter", "open"},
@@ -376,7 +393,7 @@ func (m Model) View() string {
 			{"d", "delete"},
 			{"←/esc", "back"},
 			{"q", "quit"},
-		})
+		}
 	}
 
 	// The footer holds one thing at a time. A pending delete outranks a status
@@ -389,11 +406,97 @@ func (m Model) View() string {
 		help = statusStyle.Render(m.statusMsg)
 	}
 
-	versionTag := mutedStyle.Render("  v" + m.version)
-
 	// Pin the footer to the last row of the terminal. Views whose content is
 	// shorter than the window would otherwise leave it floating mid-screen.
-	return padToHeight(content, m.height-1) + "\n" + help + versionTag
+	frame := padToHeight(content, m.height-1) + "\n" + m.footer(help, helpKeys)
+
+	// Last chokepoint before anything reaches the terminal. A row wider than
+	// the window is wrapped into two, so the frame occupies more rows than it
+	// claims; the terminal scrolls, the renderer's cursor arithmetic no longer
+	// matches the screen, and rows are stranded — the header and footer appear
+	// twice, and a line being typed appears repeated down the screen. Every
+	// view goes through here, so this is the one place that can guarantee it
+	// cannot happen.
+	return clampFrame(frame, m.width, m.height)
+}
+
+// clampFrame trims a frame to the terminal it is being drawn into: each row to
+// the width, and the whole frame to the number of rows.
+func clampFrame(frame string, width, height int) string {
+	rows := strings.Split(strings.TrimRight(frame, "\n"), "\n")
+	if height > 0 && len(rows) > height {
+		rows = rows[:height]
+	}
+	if width > 0 {
+		for i, r := range rows {
+			if visibleLen(r) > width {
+				rows[i] = truncateVisible(r, width)
+			}
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// footer puts the keybindings on the left and the clock, the age of the open
+// session and the version on the right.
+//
+// The age is the point: watching a session that is still being written, it is
+// the difference between "nothing is happening" and "nothing has happened for
+// four minutes".
+func (m Model) footer(help string, keys []helpKey) string {
+	right := mutedStyle.Render(m.footerStatus())
+
+	// Build the keybindings to fit what is left after the status. The sessions
+	// list has a dozen of them, which is wider than an 80- or 100-column
+	// terminal on its own; dropping the last few is better than wrapping onto
+	// a second row, which pushes the footer off the screen.
+	if help == "" {
+		help = renderHelpFit(keys, m.width-visibleLen(right))
+	}
+
+	// Right-align by padding between the two. visibleLen is required because
+	// both sides carry colour escapes, and a line wider than the terminal
+	// wraps and pushes the footer off the screen.
+	gap := m.width - visibleLen(help) - visibleLen(right)
+	if gap < 1 {
+		// No room for both: the keys matter more than the clock.
+		if visibleLen(help) <= m.width {
+			return help
+		}
+		return truncateVisible(help, m.width)
+	}
+	return help + strings.Repeat(" ", gap) + right
+}
+
+// footerStatus is the right-hand text: how long ago the open session was
+// written, the time now, and the version.
+func (m Model) footerStatus() string {
+	parts := make([]string, 0, 3)
+
+	if sess := m.selectedSession; sess != nil && !sess.Info.LastUpdate.IsZero() {
+		parts = append(parts, "updated "+agoShort(time.Since(sess.Info.LastUpdate)))
+	}
+	parts = append(parts, time.Now().Format("15:04:05"))
+	parts = append(parts, "v"+m.version)
+
+	return strings.Join(parts, " · ") + " "
+}
+
+// agoShort renders an elapsed duration in as few characters as possible, for a
+// footer that has to share a row with the keybindings.
+func agoShort(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours())/24)
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -931,6 +1034,26 @@ func padToHeight(content string, n int) string {
 type helpKey struct {
 	key  string
 	desc string
+}
+
+// renderHelpFit renders as many keybindings as fit in width, dropping from the
+// end and marking the omission. Keys are listed most useful first, so the ones
+// that go are the ones least missed.
+func renderHelpFit(keys []helpKey, width int) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	full := renderHelp(keys)
+	if width <= 0 || visibleLen(full) <= width {
+		return full
+	}
+	for n := len(keys) - 1; n > 0; n-- {
+		candidate := renderHelp(keys[:n]) + mutedStyle.Render(" …")
+		if visibleLen(candidate) <= width {
+			return candidate
+		}
+	}
+	return truncateVisible(full, width)
 }
 
 func renderHelp(keys []helpKey) string {

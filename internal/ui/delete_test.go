@@ -195,7 +195,10 @@ func TestDeletePromptSwallowsKeys(t *testing.T) {
 // delete looked like it had done nothing.
 func TestStatusMessageReplacesHelpLine(t *testing.T) {
 	m, _ := deleteFixture(t)
-	m.width = 100
+	// Wide enough for the whole sessions help line, which is 129 columns. On a
+	// narrower terminal the footer drops its last keys rather than wrapping, so
+	// "d delete" would legitimately be absent.
+	m.width = 160
 
 	helpOnly := m.View()
 	if !strings.Contains(helpOnly, "d delete") {
