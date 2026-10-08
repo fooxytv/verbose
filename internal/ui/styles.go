@@ -152,3 +152,30 @@ var (
 			Foreground(colorRed).
 			Bold(true)
 )
+
+// Tree view: what a session did to each file.
+var (
+	// A directory, which the session never touches directly.
+	dirStyle = lipgloss.NewStyle().
+			Foreground(colorBlue).
+			Bold(true)
+
+	// A file this session created.
+	createdStyle = lipgloss.NewStyle().
+			Foreground(colorGreen).
+			Bold(true)
+
+	// A file this session changed.
+	changedStyle = lipgloss.NewStyle().
+			Foreground(colorYellow).
+			Bold(true)
+
+	// A file this session removed. Deletion is inferred from shell commands,
+	// never recorded, so this is the one state that can be wrong.
+	deletedStyle = lipgloss.NewStyle().
+			Foreground(colorRed)
+
+	// A file the session read but did not change.
+	readStyle = lipgloss.NewStyle().
+			Foreground(colorText)
+)

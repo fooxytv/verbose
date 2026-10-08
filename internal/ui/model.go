@@ -19,6 +19,7 @@ const (
 	viewEvent             // single event drill-down
 	viewProject           // project-level view
 	viewReplay            // step-by-step playback of a session
+	viewTree              // project tree, marked with what the session changed
 )
 
 // sessionsUpdatedMsg signals that the session store has new data.
@@ -66,6 +67,18 @@ type Model struct {
 	// Session todos
 	sessionTodos []session.TodoItem
 
+	// Project tree, marked with what the open session did to each file. The
+	// structure is read from disk once when the view opens; the marks come from
+	// the transcript and follow the replay position.
+	treeRoot        *session.TreeNode
+	treeActivity    map[string]*session.FileActivity
+	treeCollapsed   map[string]bool
+	treeCursor      int
+	treeScroll      int
+	treeChangedOnly bool
+	// treeGen invalidates fade ticks left over from an earlier step.
+	treeGen int
+
 	// Replay: one step of the session at a time, at reading speed.
 	replaySteps   []session.ReplayStep
 	replayIndex   int
@@ -82,6 +95,9 @@ type Model struct {
 	replayLive bool
 	// replayCodeOnly narrows the step list to the steps that wrote code.
 	replayCodeOnly bool
+	// replayStepAt is when playback reached the current step, which is what the
+	// tree's highlight fade is measured from.
+	replayStepAt time.Time
 	// A step number being typed at the "/" prompt, as in "/24".
 	replayGotoTyping bool
 	replayGotoDraft  string
@@ -210,7 +226,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, clearStatusIn(deleteStatusDuration)
 
 	case replayTypeMsg:
-		if msg.gen != m.replayGen || !m.replayPlaying || m.mode != viewReplay {
+		if msg.gen != m.replayGen || !m.replayPlaying || !m.replayVisible() {
 			return m, nil
 		}
 		m.replayTyped += m.replayCharsPerTick()
@@ -218,7 +234,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case replayTickMsg:
 		// Ignore ticks from before the last pause/step/speed change.
-		if msg.gen != m.replayGen || !m.replayPlaying || m.mode != viewReplay {
+		if msg.gen != m.replayGen || !m.replayPlaying || !m.replayVisible() {
 			return m, nil
 		}
 		if m.replayAtEnd() {
@@ -236,7 +252,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.replayIndex++
 		m.replayScroll = 0
 		m.replayTyped = 0
+		m.replayStepAt = time.Now()
 		return m, m.replayAdvanceCmd()
+
+	case treeTickMsg:
+		// Only keeps ticking while a highlight is still fading.
+		if msg.gen != m.treeGen || m.mode != viewTree {
+			return m, nil
+		}
+		if treeFadeStage(time.Since(m.replayStepAt)) < treeFadeStages {
+			return m, treeTickCmd(m.treeGen)
+		}
+		return m, nil
 
 	case clockTickMsg:
 		// The view reads the wall clock directly; the tick only forces a redraw.
@@ -272,6 +299,7 @@ func (m Model) View() string {
 			{"p", "project"},
 			{"c", "continue"},
 			{"R", "replay"},
+			{"T", "tree"},
 			{"n", "new"},
 			{"y", "yank"},
 			{"F", "fork"},
@@ -305,6 +333,7 @@ func (m Model) View() string {
 			{"N", "next fail"},
 			{"s", "summary"},
 			{"R", "replay"},
+			{"T", "tree"},
 			{"c", "continue"},
 			{"d", "delete"},
 			{"f", followLabel},
@@ -376,6 +405,24 @@ func (m Model) View() string {
 			{"tab", "code only"},
 			{"f", liveLabel},
 			{"t", "timeline"},
+			{"esc", "back"},
+			{"q", "quit"},
+		}
+
+	case viewTree:
+		if m.selectedSession != nil {
+			content = renderTree(m.treeViewState())
+		}
+		changedLabel := "changed only"
+		if m.treeChangedOnly {
+			changedLabel = "all files"
+		}
+		helpKeys = []helpKey{
+			{"↑/↓", "move"},
+			{"→/←", "open/close"},
+			{"space", "play"},
+			{"tab", changedLabel},
+			{"R", "replay"},
 			{"esc", "back"},
 			{"q", "quit"},
 		}
@@ -581,6 +628,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// that mean something else elsewhere.
 	if m.mode == viewReplay {
 		return m.handleReplayKey(msg, key)
+	}
+
+	// So does the tree: arrows move a cursor and open directories rather than
+	// scrolling a page.
+	if m.mode == viewTree {
+		return m.handleTreeKey(msg, key)
 	}
 
 	// Normalize space to "enter" so it works as a selection key
@@ -876,6 +929,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if prompt := lastUserPrompt(sess); prompt != "" {
 				return m, forkSessionCmd(info.Source, info.CWD, prompt)
 			}
+		}
+
+	case "T":
+		// The project tree, marked with what this session did to it.
+		if sess := m.sessionInContext(); sess != nil {
+			m.openTree(sess)
 		}
 
 	case "R":

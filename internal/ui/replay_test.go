@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -640,6 +642,17 @@ func TestViewNeverOverflowsTerminal(t *testing.T) {
 			m.replayGotoDraft = "123"
 			return m
 		}},
+		{"tree", func(m Model) Model {
+			m.openTree(sess)
+			m.treeCursor = 3
+			return m
+		}},
+		{"tree changed only", func(m Model) Model {
+			m.openTree(sess)
+			m.treeChangedOnly = true
+			m.replayPlaying = true
+			return m
+		}},
 		{"status message", func(m Model) Model {
 			m.mode = viewSessions
 			m.statusMsg = "Moved to Trash: a-fairly-long-transcript-file-name.jsonl"
@@ -803,5 +816,155 @@ func TestViewNeverOverflowsWithTabbedCode(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// treeModel builds a real project directory and a session that worked in it, so
+// the tree tests exercise actual rows rather than skipping.
+func treeModel(t *testing.T) Model {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel string) string {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	main := write("src/main.go")
+	util := write("src/util.go")
+	write("src/untouched.go")
+	write("README.md")
+
+	sess := &session.Session{
+		Info: session.SessionInfo{ID: "t1", Title: "tree fixture", CWD: root},
+		Events: []session.Event{
+			{Type: session.EventUserPrompt, UserText: "do the work"},
+			{Type: session.EventToolUse, ToolName: "Read",
+				ToolInput: map[string]interface{}{"file_path": main}},
+			{Type: session.EventToolUse, ToolName: "Edit",
+				ToolInput: map[string]interface{}{"file_path": main},
+				Result: &session.ToolResult{FilePath: main,
+					StructuredPatch: []session.PatchHunk{{Lines: []string{"+a", "-b"}}}}},
+			{Type: session.EventToolUse, ToolName: "Write",
+				ToolInput: map[string]interface{}{"file_path": util, "content": "y\n"},
+				Result:    &session.ToolResult{FilePath: util}},
+			{Type: session.EventToolUse, ToolName: "Bash",
+				ToolInput: map[string]interface{}{"command": "echo done"}},
+		},
+	}
+
+	m := Model{width: 100, height: 30, version: "0.0.0"}
+	m.replaySteps = session.BuildReplay(sess)
+	m.openTree(sess)
+	return m
+}
+
+func TestTreeCursorNavigationAndCollapse(t *testing.T) {
+	m := treeModel(t)
+	rows := m.treeRows()
+	if len(rows) < 2 {
+		t.Fatalf("fixture tree has only %d rows", len(rows))
+	}
+
+	// Down then up returns to where it started.
+	res, _ := m.handleTreeKey(namedKey(tea.KeyDown), "down")
+	m = res.(Model)
+	if m.treeCursor != 1 {
+		t.Fatalf("cursor = %d after down, want 1", m.treeCursor)
+	}
+	res, _ = m.handleTreeKey(namedKey(tea.KeyUp), "up")
+	m = res.(Model)
+	if m.treeCursor != 0 {
+		t.Errorf("cursor = %d after up, want 0", m.treeCursor)
+	}
+
+	// Collapsing the root hides everything beneath it.
+	root := rows[0].node
+	if !root.IsDir {
+		t.Skip("root is not a directory")
+	}
+	res, _ = m.handleTreeKey(namedKey(tea.KeyLeft), "left")
+	m = res.(Model)
+	if !m.treeCollapsed[root.Path] {
+		t.Fatal("left should collapse the directory under the cursor")
+	}
+	if n := len(m.treeRows()); n != 1 {
+		t.Errorf("collapsed root leaves %d rows, want 1", n)
+	}
+
+	res, _ = m.handleTreeKey(namedKey(tea.KeyRight), "right")
+	m = res.(Model)
+	if m.treeCollapsed[root.Path] {
+		t.Error("right should open it again")
+	}
+}
+
+// The cursor must never point past the rows, including after the filter cuts
+// most of them away.
+func TestTreeCursorStaysInRangeAcrossFilter(t *testing.T) {
+	m := treeModel(t)
+	m.treeCursor = len(m.treeRows()) - 1
+
+	res, _ := m.handleTreeKey(namedKey(tea.KeyTab), "tab")
+	m = res.(Model)
+	if !m.treeChangedOnly {
+		t.Fatal("tab should turn on the changed-only filter")
+	}
+	if rows := m.treeRows(); m.treeCursor > max(0, len(rows)-1) {
+		t.Errorf("cursor %d is past the %d filtered rows", m.treeCursor, len(rows))
+	}
+	// Rendering with a stale cursor must not panic either.
+	m.treeCursor = 9999
+	if out := renderTree(m.treeViewState()); out == "" {
+		t.Error("empty render with an out-of-range cursor")
+	}
+}
+
+// The tree is drawn as of the replay position, so rewinding hides later work.
+func TestTreeFollowsReplayPosition(t *testing.T) {
+	m := treeModel(t)
+	if len(m.replaySteps) < 3 {
+		t.Fatalf("fixture has only %d replay steps", len(m.replaySteps))
+	}
+
+	m.treeChangedOnly = true
+	m.replayIndex = len(m.replaySteps) - 1
+	atEnd := len(m.treeRows())
+
+	m.replayIndex = 0
+	atStart := len(m.treeRows())
+
+	if atStart > atEnd {
+		t.Errorf("tree shows %d changed rows at the first step but %d at the last: "+
+			"it should grow as the replay advances, not shrink", atStart, atEnd)
+	}
+	if m.treeUpto() != m.replaySteps[0].EventIndex {
+		t.Errorf("treeUpto = %d, want the first step's event index %d",
+			m.treeUpto(), m.replaySteps[0].EventIndex)
+	}
+}
+
+func TestTreeFadeStageRamps(t *testing.T) {
+	if got := treeFadeStage(-time.Second); got != 0 {
+		t.Errorf("a step reached in the future should be at the start, got %d", got)
+	}
+	if got := treeFadeStage(0); got != 0 {
+		t.Errorf("stage at 0 = %d, want 0", got)
+	}
+	if got := treeFadeStage(treeFadeDuration * 2); got != treeFadeStages {
+		t.Errorf("long past the ramp = %d, want %d (settled)", got, treeFadeStages)
+	}
+	// Monotonic: a highlight never gets brighter as time passes.
+	last := -1
+	for d := time.Duration(0); d < treeFadeDuration*2; d += treeFadeDuration / 6 {
+		s := treeFadeStage(d)
+		if s < last {
+			t.Fatalf("fade went backwards at %v: %d after %d", d, s, last)
+		}
+		last = s
 	}
 }

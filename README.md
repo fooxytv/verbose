@@ -117,6 +117,7 @@ OpenCode sessions are marked `◈` in the session list, Claude Code sessions `�
 | `d` | Delete session (asks to confirm) |
 | `s` | Toggle session summary |
 | `R` | Replay the session step by step |
+| `T` | Project tree, marked with what the session changed |
 | `f` | Toggle auto-follow (timeline view) |
 | `r` | Refresh session list |
 | `q` / `Ctrl+C` | Quit |
@@ -215,6 +216,39 @@ thinking block on disk has an empty body. What a step shows is derived from
 what was recorded — files, line counts, exit behaviour — and the agent's own
 narration where it exists. Generated explanations are a separate layer, not
 yet built.
+
+## Tree
+
+`T` shows the project as a tree, marked with what the open session did to each
+file: **new** files in green, **changed** in yellow with their churn, **removed**
+in red, everything the session never touched dimmed. `Tab` narrows it to just
+the files that changed. `Enter` on a file jumps the replay to the change.
+
+Two different kinds of truth sit in that one view, and the header says so:
+
+- **The structure comes from disk**, so it is the project as it is *now*. For a
+  session from three weeks ago that is today's shape with three-week-old marks
+  painted on. Files the session touched that have since gone are grafted back in
+  and marked `(gone)`.
+- **The marks come from the transcript**, which is exact however old the session
+  is.
+
+The tree follows the replay. `Space` plays, and files light up as they are
+written, settling over about a second — so the project assembles itself in front
+of you. Step back in the replay and later work disappears again.
+
+Build output and version control are skipped (`node_modules`, `.git`, `dist`,
+`target`, `.terraform` and the rest), unless the session changed something
+inside, in which case the directory is opened anyway. The scan is capped at
+4000 entries and 8 levels so a large repository cannot stall the view.
+
+One honest limitation: **deletions are inferred, not recorded.** Claude Code has
+no delete tool, so the only evidence is an `rm` inside a shell command. Simple
+forms are picked up; anything with a glob, a variable or a substitution is
+skipped rather than guessed at, because naming the wrong file as deleted is
+worse than naming none. For the same reason a file written through the shell is
+reported as *written* rather than created or edited — whether it existed
+beforehand is nowhere in the transcript.
 
 ## How it works
 

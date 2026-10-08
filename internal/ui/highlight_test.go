@@ -119,3 +119,39 @@ func BenchmarkReplayFrame(b *testing.B) {
 			delay: replayDefaultDelay, width: 100, height: 40})
 	}
 }
+
+// The tree re-flattens on every frame, and a replay redraws it many times a
+// second, so a real project's tree has to stay cheap.
+func BenchmarkTreeFrame(b *testing.B) {
+	store, err := session.NewStore()
+	if err != nil {
+		b.Skip(err)
+	}
+	defer store.Close()
+	store.Scan()
+
+	// The session whose project has the most files on disk.
+	var best Model
+	bestRows := 0
+	for _, info := range store.GetSessions() {
+		sess := store.GetSession(info.ID)
+		if sess == nil || sess.Info.CWD == "" {
+			continue
+		}
+		m := Model{width: 100, height: 40, version: "0.0.0"}
+		m.replaySteps = session.BuildReplay(sess)
+		m.openTree(sess)
+		if n := len(m.treeRows()); n > bestRows {
+			best, bestRows = m, n
+		}
+	}
+	if bestRows == 0 {
+		b.Skip("no project directory available")
+	}
+	b.Logf("largest tree: %d rows (%s)", bestRows, best.selectedSession.Info.CWD)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		best.View()
+	}
+}

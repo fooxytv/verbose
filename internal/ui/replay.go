@@ -624,6 +624,7 @@ func (m *Model) startReplay(sess *session.Session) {
 	m.replayScroll = 0
 	m.replayPlaying = false
 	m.replayTyped = -1 // paused: show the whole step
+	m.replayStepAt = time.Now()
 	m.replayLive = true
 	if m.replayDelay == 0 {
 		m.replayDelay = replayDefaultDelay
@@ -804,6 +805,7 @@ func (m Model) handleReplayGotoKey(msg tea.KeyMsg, key string) (tea.Model, tea.C
 		// Steps are numbered from 1 on screen.
 		m.replayIndex = clampInt(n-1, 0, len(m.replaySteps)-1)
 		m.replayScroll = 0
+		m.replayStepAt = time.Now()
 		m.replayPlaying = false
 		m.replayTyped = -1
 		m.replayGen++
@@ -933,6 +935,7 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		m.replayIndex = 0
 		m.replayScroll = 0
 		m.replayGen++
+		m.replayStepAt = time.Now()
 		if m.replayPlaying {
 			m.replayTyped = 0
 		}
@@ -941,6 +944,7 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 	case "G", "end":
 		m.replayIndex = max(0, len(m.replaySteps)-1)
 		m.replayScroll = 0
+		m.replayStepAt = time.Now()
 		m.replayPlaying = false
 		m.replayTyped = -1
 		m.replayGen++
@@ -1017,6 +1021,7 @@ func (m *Model) replayStep(n int) {
 	m.replayIndex = clampInt(m.replayIndex+n, 0, len(m.replaySteps)-1)
 	m.replayScroll = 0
 	m.replayTyped = -1
+	m.replayStepAt = time.Now()
 }
 
 // jumpTimelineToReplayStep points the timeline cursor at the event the replay
