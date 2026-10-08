@@ -850,6 +850,13 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		return m.handleReplayGotoKey(msg, key)
 	}
 
+	// With the tree beside the replay, ctrl and an arrow drives the tree. The
+	// plain arrows stay with the replay, which is what they do without the
+	// sidebar, so nothing changes meaning when it opens.
+	if m.treeSplit && m.handleTreeSidebarKey(key, m.height-1) {
+		return m, nil
+	}
+
 	// Space is normalised to "enter" for selection elsewhere; here it is the
 	// play/pause control, so it has to be caught before that mapping applies.
 	if msg.Type == tea.KeySpace || key == "enter" {

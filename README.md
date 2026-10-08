@@ -136,6 +136,9 @@ In the replay view:
 | `f` | Follow a running session (on by default) |
 | `0` | Back to the first step |
 | `t` | Jump to this point in the timeline |
+| `Ctrl`+`↑`/`↓` | Move the tree selection (with the sidebar open) |
+| `Ctrl`+`←`/`→` | Close / open a directory in the sidebar |
+| `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
 
 Mouse scroll is also supported in all views.
@@ -258,6 +261,13 @@ the tree on the left, the code streaming on the right, the tree lighting up as
 each file is written. All keys stay with the replay and the tree follows, so
 there is no focus to switch and no key that means one thing on the left and
 another on the right — navigating the tree is what the full-screen view is for.
+
+In the split the plain arrows stay with the replay, so nothing changes meaning
+when the sidebar opens. **`Ctrl`+`↑`/`↓` moves the tree selection**, and
+`Ctrl`+`←`/`→` closes and opens directories. Driving the tree by hand stops it
+following the replay — being yanked away mid-read is worse than having to ask
+for the follow back — and `Ctrl`+`f` hands it back. The footer shows which of
+the two is in charge.
 
 It needs **100 columns**. Below that the code pane has too little room to read
 code in, so the split is refused and says how many columns it wants rather than

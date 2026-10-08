@@ -964,7 +964,7 @@ func TestTreeCursorStaysInRangeAcrossFilter(t *testing.T) {
 	}
 	// Rendering with a stale cursor must not panic either.
 	m.treeCursor = 9999
-	if out := renderTree(m.treeViewState(m.width, m.height)); out == "" {
+	if out := renderTree(m.treeViewState(usableWidth(m.width), m.height)); out == "" {
 		t.Error("empty render with an out-of-range cursor")
 	}
 }
@@ -1196,12 +1196,17 @@ func TestTreeFollowStopsOnManualNavigation(t *testing.T) {
 		t.Error("playing again should resume following")
 	}
 
-	// In the split there is no tree cursor, so it follows regardless.
-	m.treeFollow = false
+	// The sidebar follows too, but it is no longer exempt: it has a cursor of
+	// its own now, so the reader can take it over there as well.
+	m.treeFollow = true
 	m.replayPlaying = false
 	m.treeSplit = true
 	if !m.treeFollowing() {
-		t.Error("the sidebar always follows")
+		t.Error("an untouched sidebar should follow")
+	}
+	m.treeFollow = false
+	if m.treeFollowing() {
+		t.Error("a sidebar the reader has taken over should stay put")
 	}
 }
 
@@ -1248,5 +1253,101 @@ func TestTreeFlashSettlesIntoAPersistentMark(t *testing.T) {
 	style, _ := treeRowStyle(v, other)
 	if style.GetForeground() != mutedStyle.GetForeground() {
 		t.Error("a file the session never touched should stay dim")
+	}
+}
+
+// In the split every plain arrow belongs to the replay, which left the tree
+// unreachable while it was running. ctrl with an arrow drives the tree instead.
+func TestSidebarCtrlArrowsDriveTheTree(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 24
+	m.replayPlaying = true
+
+	before := m.replayIndex
+
+	res, _ := m.handleReplayKey(namedKey(tea.KeyCtrlDown), "ctrl+down")
+	m = res.(Model)
+	if m.treeCursor != 1 {
+		t.Errorf("tree cursor = %d after ctrl+down, want 1", m.treeCursor)
+	}
+	if m.replayIndex != before {
+		t.Error("ctrl+down must not move the replay")
+	}
+	if m.treeFollowing() {
+		t.Error("driving the tree by hand should stop the follow")
+	}
+
+	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlUp), "ctrl+up")
+	m = res.(Model)
+	if m.treeCursor != 0 {
+		t.Errorf("tree cursor = %d after ctrl+up, want 0", m.treeCursor)
+	}
+
+	// ctrl+f gives the follow back.
+	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlF), "ctrl+f")
+	m = res.(Model)
+	if !m.treeFollowing() {
+		t.Error("ctrl+f should hand the follow back to the replay")
+	}
+
+	// A plain arrow still belongs to the replay, so nothing changes meaning
+	// when the sidebar opens.
+	m.replayPlaying = true
+	cursorBefore := m.treeCursor
+	res, _ = m.handleReplayKey(namedKey(tea.KeyRight), "right")
+	m = res.(Model)
+	if m.treeCursor != cursorBefore {
+		t.Error("a plain arrow must not move the tree")
+	}
+}
+
+// ctrl+left and ctrl+right open and close directories in the sidebar.
+func TestSidebarCtrlArrowsCollapseDirectories(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 24
+
+	root := m.treeRows()[0].node
+	if !root.IsDir {
+		t.Skip("root is not a directory")
+	}
+
+	res, _ := m.handleReplayKey(namedKey(tea.KeyCtrlLeft), "ctrl+left")
+	m = res.(Model)
+	if !m.treeCollapsed[root.Path] {
+		t.Fatal("ctrl+left should close the directory under the cursor")
+	}
+	if n := len(m.treeRows()); n != 1 {
+		t.Errorf("closed root leaves %d rows, want 1", n)
+	}
+
+	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlRight), "ctrl+right")
+	m = res.(Model)
+	if m.treeCollapsed[root.Path] {
+		t.Error("ctrl+right should open it again")
+	}
+}
+
+// The cursor must stay on screen in the sidebar's pane, which is shorter than
+// the terminal by the footer.
+func TestSidebarScrollsCursorIntoView(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 14
+
+	for i := 0; i < 40; i++ {
+		res, _ := m.handleReplayKey(namedKey(tea.KeyCtrlDown), "ctrl+down")
+		m = res.(Model)
+
+		v := m.treeViewState(sidebarWidth(m.width), m.height-1)
+		visible := treeVisibleRows(v.height)
+		if v.cursor < v.scroll || v.cursor >= v.scroll+visible {
+			t.Fatalf("after %d moves the cursor %d is outside [%d,%d)",
+				i+1, v.cursor, v.scroll, v.scroll+visible)
+		}
 	}
 }

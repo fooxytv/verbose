@@ -256,9 +256,12 @@ func renderTreeRow(v treeView, i int, row treeRow) string {
 		line += " " + bg(mutedStyle).Render(suffix)
 	}
 
-	// Pad the selection across the row so it reads as one band.
+	// Pad the selection across the row so it reads as one band. v.width is what
+	// the tree may fill — the pane's width in a split, one short of the
+	// terminal when it has the screen to itself — so the band stops exactly
+	// where the tree does.
 	if selected {
-		if pad := usableWidth(v.width) - visibleLen(line); pad > 0 {
+		if pad := v.width - visibleLen(line); pad > 0 {
 			line += lipgloss.NewStyle().Background(colorBgSelected).
 				Render(strings.Repeat(" ", pad))
 		}
@@ -428,14 +431,15 @@ func (m Model) treeViewState(width, height int) treeView {
 
 // treeFollowing reports whether the tree should move itself to the change.
 //
-// Always in the split, where every key belongs to the replay and there is no
-// tree cursor to fight with. In the full-screen tree, only until the reader
-// takes over by moving the cursor.
+// Only while the reader has not taken over. Browsing the tree and having it
+// yanked away by the next change is worse than having to ask for the follow
+// back, so moving the cursor turns it off in either view and ctrl+f restores
+// it.
 func (m Model) treeFollowing() bool {
-	if m.treeSplit {
-		return true
+	if !m.treeFollow {
+		return false
 	}
-	return m.treeFollow && m.replayPlaying
+	return m.treeSplit || m.replayPlaying
 }
 
 // treeFocusRow is the row the tree should be showing: the most recent change at
@@ -783,4 +787,75 @@ func renderSplit(m Model) string {
 	tree := renderTree(m.treeViewState(side, rows))
 	replay := renderReplay(m.replayViewState(main, rows))
 	return joinPanes(tree, replay, side, main, rows)
+}
+
+// Navigating the sidebar.
+//
+// In the split every arrow key belongs to the replay, which left the tree
+// unreachable while it was running. ctrl with the arrows moves the tree
+// instead: it collides with nothing, and it reads as "the other pane".
+
+// treeMove moves the tree cursor by n rows within a pane of the given height,
+// and hands the follow back to the reader.
+func (m *Model) treeMove(n, paneHeight int) {
+	rows := m.treeRows()
+	if len(rows) == 0 {
+		return
+	}
+	m.treeFollow = false
+	m.treeCursor = clampInt(m.treeCursor+n, 0, len(rows)-1)
+	m.treeScrollInto(len(rows), paneHeight)
+}
+
+// treeScrollInto keeps the cursor on screen for a pane of the given height.
+func (m *Model) treeScrollInto(total, paneHeight int) {
+	visible := treeVisibleRows(paneHeight)
+	if m.treeCursor < m.treeScroll {
+		m.treeScroll = m.treeCursor
+	}
+	if m.treeCursor >= m.treeScroll+visible {
+		m.treeScroll = m.treeCursor - visible + 1
+	}
+	m.treeScroll = clampInt(m.treeScroll, 0, max(0, total-visible))
+}
+
+// treeToggleAt opens or closes the directory under the cursor. open reports
+// which way to go; a file is left alone.
+func (m *Model) treeToggleAt(open bool) {
+	rows := m.treeRows()
+	if m.treeCursor >= len(rows) {
+		return
+	}
+	n := rows[m.treeCursor].node
+	if !n.IsDir {
+		return
+	}
+	m.treeFollow = false
+	if open {
+		delete(m.treeCollapsed, n.Path)
+	} else {
+		m.treeCollapsed[n.Path] = true
+	}
+}
+
+// handleTreeSidebarKey handles the ctrl+arrow keys that drive the sidebar while
+// the replay owns the plain ones. It reports whether it consumed the key.
+func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
+	switch key {
+	case "ctrl+down":
+		m.treeMove(1, paneHeight)
+	case "ctrl+up":
+		m.treeMove(-1, paneHeight)
+	case "ctrl+right":
+		m.treeToggleAt(true)
+	case "ctrl+left":
+		m.treeToggleAt(false)
+	case "ctrl+f":
+		// Hand the follow back to the replay.
+		m.treeFollow = true
+	default:
+		return false
+	}
+	m.treeGen++
+	return true
 }

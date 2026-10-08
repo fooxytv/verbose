@@ -406,20 +406,32 @@ func (m Model) View() string {
 			{"space", playLabel},
 			{"→/←", "step"},
 			{"T", treeLabel},
-			{"tab", codeLabel},
-			{"+/-", "speed"},
-			{"/", "go to step"},
-			{"↑/↓", "scroll"},
-			{"0", "restart"},
-			{"f", liveLabel},
-			{"t", "timeline"},
-			{"esc", "back"},
-			{"q", "quit"},
 		}
+		if m.treeSplit {
+			followLabel := "follow tree"
+			if m.treeFollow {
+				followLabel = "following ●"
+			}
+			helpKeys = append(helpKeys,
+				helpKey{"ctrl+↑/↓", "tree"},
+				helpKey{"ctrl+f", followLabel},
+			)
+		}
+		helpKeys = append(helpKeys,
+			helpKey{"tab", codeLabel},
+			helpKey{"+/-", "speed"},
+			helpKey{"/", "go to step"},
+			helpKey{"↑/↓", "scroll"},
+			helpKey{"0", "restart"},
+			helpKey{"f", liveLabel},
+			helpKey{"t", "timeline"},
+			helpKey{"esc", "back"},
+			helpKey{"q", "quit"},
+		)
 
 	case viewTree:
 		if m.selectedSession != nil {
-			content = renderTree(m.treeViewState(m.width, m.height))
+			content = renderTree(m.treeViewState(usableWidth(m.width), m.height))
 		}
 		changedLabel := "changed only"
 		if m.treeChangedOnly {
