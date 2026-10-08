@@ -407,18 +407,10 @@ func (m Model) treeViewState(width, height int) treeView {
 	upto := m.treeUpto()
 	rows := flattenTree(m.treeRoot, m.treeCollapsed, m.treeActivity, upto, m.treeChangedOnly)
 
-	cursor := clampInt(m.treeCursor, 0, max(0, len(rows)-1))
+	cursor := m.treeSelection(rows, upto)
 	scroll := m.treeScroll
-
-	// Follow the change. A project tree is far longer than the pane showing it
-	// — 122 rows into 22 — so without this the file being written is usually
-	// below the fold and its highlight is never seen. Measured on one session,
-	// 74 of the 90 steps that light a file lit one off screen.
-	if m.treeFollowing() {
-		if at := m.treeFocusRow(rows, upto); at >= 0 {
-			cursor = at
-			scroll = scrollToShow(at, len(rows), treeVisibleRows(height))
-		}
+	if m.treeFollowing() && cursor != clampInt(m.treeCursor, 0, max(0, len(rows)-1)) {
+		scroll = scrollToShow(cursor, len(rows), treeVisibleRows(height))
 	}
 
 	return treeView{
@@ -435,6 +427,26 @@ func (m Model) treeViewState(width, height int) treeView {
 		width:     width,
 		height:    height,
 	}
+}
+
+// treeSelection is the row the reader is looking at: the change being followed
+// while the tree is following, and their own cursor once they have taken over.
+//
+// The renderer and anything that acts on "the selection" have to agree. They
+// did not: the follow was computed here for drawing only and never written
+// back, so treeCursor stayed where it started — row 0, the root directory — and
+// opening a diff did nothing at all until the cursor had been moved by hand.
+//
+// A project tree is far longer than the pane showing it, 122 rows into 22, so
+// following matters: measured on one session, 74 of the 90 steps that light a
+// file lit one off screen.
+func (m Model) treeSelection(rows []treeRow, upto int) int {
+	if m.treeFollowing() {
+		if at := m.treeFocusRow(rows, upto); at >= 0 {
+			return at
+		}
+	}
+	return clampInt(m.treeCursor, 0, max(0, len(rows)-1))
 }
 
 // treeFollowing reports whether the tree should move itself to the change.
@@ -623,6 +635,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		m.treeCursor = m.treeSelection(rows, m.treeUpto())
 		if m.treeCursor < len(rows) {
 			n := rows[m.treeCursor].node
 			if n.IsDir {
@@ -840,8 +853,11 @@ func (m *Model) treeMove(n, paneHeight int) {
 	if len(rows) == 0 {
 		return
 	}
+	// Start from the row on screen. Moving from a stale cursor would jump the
+	// selection back to the top of the tree on the first keypress.
+	from := m.treeSelection(rows, m.treeUpto())
 	m.treeFollow = false
-	m.treeCursor = clampInt(m.treeCursor+n, 0, len(rows)-1)
+	m.treeCursor = clampInt(from+n, 0, len(rows)-1)
 	m.treeScrollInto(len(rows), paneHeight)
 }
 
@@ -861,6 +877,10 @@ func (m *Model) treeScrollInto(total, paneHeight int) {
 // which way to go; a file is left alone.
 func (m *Model) treeToggleAt(open bool) {
 	rows := m.treeRows()
+	if len(rows) == 0 {
+		return
+	}
+	m.treeCursor = m.treeSelection(rows, m.treeUpto())
 	if m.treeCursor >= len(rows) {
 		return
 	}
@@ -908,11 +928,19 @@ func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
 // does at once, and the pane the diff needs is the one the replay was using.
 func (m *Model) openDiff() {
 	rows := m.treeRows()
-	if m.treeCursor >= len(rows) {
+	if len(rows) == 0 {
 		return
 	}
+
+	// Take the followed row over the stored one, and keep it: the reader is now
+	// looking at this file rather than at wherever the replay goes next.
+	at := m.treeSelection(rows, m.treeUpto())
+	m.treeCursor = clampInt(at, 0, len(rows)-1)
+	m.treeFollow = false
+
 	node := rows[m.treeCursor].node
 	if node.IsDir {
+		m.statusMsg = "Select a file to diff — " + node.Name + " is a directory"
 		return
 	}
 

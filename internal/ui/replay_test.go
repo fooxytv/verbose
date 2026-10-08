@@ -1882,3 +1882,100 @@ func TestWheelOnSidebarStopsFollowAndPlayResumes(t *testing.T) {
 		t.Error("playing should resume the follow after a wheel scroll too")
 	}
 }
+
+// "d" has to act on the row that is highlighted.
+//
+// The follow computed the selection for drawing only and never wrote it back,
+// so treeCursor stayed where it started — row 0, the root directory — and "d"
+// did nothing at all until the cursor had been moved by hand. The tree showed
+// app.js highlighted and the key opened nothing.
+func TestDiffOpensTheHighlightedRowNotTheStoredCursor(t *testing.T) {
+	root := t.TempDir()
+	var paths []string
+	for _, name := range []string{"a.go", "b.go", "c.go", "d.go", "e.go"} {
+		p := filepath.Join(root, "src", name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+
+	// Edit the last file, so the follow lands well away from row 0.
+	target := paths[len(paths)-1]
+	sess := &session.Session{
+		Info: session.SessionInfo{CWD: root},
+		Events: []session.Event{
+			{Type: session.EventUserPrompt, UserText: "go"},
+			{Type: session.EventToolUse, ToolName: "Edit",
+				ToolInput: map[string]interface{}{"file_path": target},
+				Result: &session.ToolResult{FilePath: target,
+					StructuredPatch: []session.PatchHunk{{
+						OldStart: 1, NewStart: 1, Lines: []string{"-old", "+new"}}}}},
+		},
+	}
+
+	m := Model{width: 160, height: 24, version: "0.0.0"}
+	m.replaySteps = session.BuildReplay(sess)
+	m.loadTreeFor(sess)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.replayIndex = len(m.replaySteps) - 1
+
+	// The stored cursor is untouched at row 0, which is the root directory.
+	if m.treeCursor != 0 {
+		t.Fatalf("treeCursor = %d, want the fixture to start at 0", m.treeCursor)
+	}
+	rows := m.treeRows()
+	if !rows[0].node.IsDir {
+		t.Fatalf("row 0 should be a directory for this test, got %s", rows[0].node.Name)
+	}
+
+	// The highlighted row is the followed change, not row 0.
+	sel := m.treeSelection(rows, m.treeUpto())
+	if rows[sel].node.Path != target {
+		t.Fatalf("highlighted row is %s, want the edited file", rows[sel].node.Name)
+	}
+
+	// Pressing d must open that file, first time, with no prior navigation.
+	res, _ := m.handleReplayKey(runeKey("d"), "d")
+	m = res.(Model)
+	if m.diffPath != target {
+		t.Fatalf("d opened %q, want the highlighted file %q", m.diffPath, target)
+	}
+	if len(diffRows(m.diffChanges(), 100)) == 0 {
+		t.Error("the highlighted file was edited, so its diff must not be empty")
+	}
+	// The cursor is kept where the reader was looking.
+	if m.treeCursor != sel {
+		t.Errorf("treeCursor = %d after d, want %d so the selection stays put", m.treeCursor, sel)
+	}
+	if m.treeFollow {
+		t.Error("opening a diff means reading this file, so the follow should stop")
+	}
+}
+
+// Moving must start from the row on screen, not from a stale cursor, or the
+// first keypress jumps the selection back to the top of the tree.
+func TestTreeMoveStartsFromTheHighlightedRow(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 24
+	m.replayIndex = len(m.replaySteps) - 1
+
+	rows := m.treeRows()
+	sel := m.treeSelection(rows, m.treeUpto())
+	if sel == 0 {
+		t.Skip("fixture does not follow away from row 0")
+	}
+
+	res, _ := m.handleReplayKey(runeKey("]"), "]")
+	m = res.(Model)
+	if m.treeCursor != sel+1 {
+		t.Errorf("treeCursor = %d after one move, want %d (one past the highlighted row)",
+			m.treeCursor, sel+1)
+	}
+}
