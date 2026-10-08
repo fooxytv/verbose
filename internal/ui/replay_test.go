@@ -1363,3 +1363,87 @@ func TestSidebarScrollsCursorIntoView(t *testing.T) {
 		}
 	}
 }
+
+// "/" means search on the timeline and go-to-step in a replay. They are
+// different views, so both are live — but the replay intercepts every key
+// while it is open, so a careless change to where that interception happens
+// would silently take the timeline's search away.
+func TestSlashMeansSearchOnTimelineAndGotoInReplay(t *testing.T) {
+	m, _ := deleteFixture(t)
+	sess := m.store.GetSession(m.sessions[0].ID)
+	if sess == nil {
+		t.Skip("fixture has no parseable session")
+	}
+	m.width, m.height = 120, 30
+
+	// On the timeline it opens search.
+	timeline := m
+	timeline.mode = viewDetail
+	timeline.selectedSession = sess
+	res, _ := timeline.handleKey(runeKey("/"))
+	timeline = res.(Model)
+	if !timeline.searchTyping {
+		t.Error("/ on the timeline should open search")
+	}
+	if timeline.replayGotoTyping {
+		t.Error("/ on the timeline must not open the go-to-step prompt")
+	}
+
+	// In a replay it opens go-to-step.
+	replay := m
+	replay.startReplay(sess)
+	res, _ = replay.handleKey(runeKey("/"))
+	replay = res.(Model)
+	if !replay.replayGotoTyping {
+		t.Error("/ in a replay should open go-to-step")
+	}
+	if replay.searchTyping {
+		t.Error("/ in a replay must not open search")
+	}
+
+	// And the footers say so.
+	timeline.searchTyping = false
+	if foot := stripAnsi(lastRow(timeline.View())); !strings.Contains(foot, "/ search") {
+		t.Errorf("timeline footer should offer search: %q", foot)
+	}
+	replay.replayGotoTyping = false
+	if foot := stripAnsi(lastRow(replay.View())); !strings.Contains(foot, "/ go to step") {
+		t.Errorf("replay footer should offer go to step: %q", foot)
+	}
+}
+
+func lastRow(frame string) string {
+	rows := visibleLines(frame)
+	return rows[len(rows)-1]
+}
+
+// Typing a query on the timeline still filters the events, which is the part
+// that would actually be missed.
+func TestTimelineSearchStillFilters(t *testing.T) {
+	m, _ := deleteFixture(t)
+	sess := m.store.GetSession(m.sessions[0].ID)
+	if sess == nil {
+		t.Skip("fixture has no parseable session")
+	}
+	m.mode = viewDetail
+	m.selectedSession = sess
+	m.width, m.height = 120, 30
+
+	all := len(m.visibleEvents())
+
+	res, _ := m.handleKey(runeKey("/"))
+	m = res.(Model)
+	for _, r := range "zzzznotpresentzzzz" {
+		res, _ = m.handleKey(runeKey(string(r)))
+		m = res.(Model)
+	}
+	res, _ = m.handleKey(namedKey(tea.KeyEnter))
+	m = res.(Model)
+
+	if m.searchQuery != "zzzznotpresentzzzz" {
+		t.Fatalf("searchQuery = %q, want the typed text", m.searchQuery)
+	}
+	if got := len(m.visibleEvents()); got >= all && all > 0 {
+		t.Errorf("search matched %d of %d events; it should have filtered them out", got, all)
+	}
+}
