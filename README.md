@@ -117,7 +117,7 @@ OpenCode sessions are marked `◈` in the session list, Claude Code sessions `�
 | `d` | Delete session (asks to confirm) |
 | `s` | Toggle session summary |
 | `R` | Replay the session step by step |
-| `T` | Project tree, marked with what the session changed |
+| `T` | Project tree, marked with what the session changed (works inside a replay too) |
 | `f` | Toggle auto-follow (timeline view) |
 | `r` | Refresh session list |
 | `q` / `Ctrl+C` | Quit |
@@ -142,7 +142,9 @@ Mouse scroll is also supported in all views.
 
 The footer's right-hand side shows how long ago the open session was written,
 the time now, and the version — so a live session visibly ticking apart from
-one that stopped four minutes ago.
+one that stopped four minutes ago. On a narrow terminal both halves give way
+gracefully: keybindings drop from the least useful end (never `q`), and the
+status drops the version before the clock and the clock before the session age.
 
 ## Replay
 
@@ -219,7 +221,8 @@ yet built.
 
 ## Tree
 
-`T` shows the project as a tree, marked with what the open session did to each
+`T` works from the sessions list, the timeline and from inside a replay. It
+shows the project as a tree, marked with what the open session did to each
 file: **new** files in green, **changed** in yellow with their churn, **removed**
 in red, everything the session never touched dimmed. `Tab` narrows it to just
 the files that changed. `Enter` on a file jumps the replay to the change.

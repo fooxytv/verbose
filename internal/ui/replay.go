@@ -986,6 +986,15 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		}
 		return m, tea.Batch(m.replayAdvanceCmd(), clearStatusAfter())
 
+	case "T":
+		// The project tree, at the same point in the session. Playback carries
+		// on if it was running, so the tree animates.
+		if m.selectedSession != nil {
+			m.openTree(m.selectedSession)
+			return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen))
+		}
+		return m, nil
+
 	case "t":
 		// Hand off to the timeline at the same point in the session.
 		m.replayPlaying = false

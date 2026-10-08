@@ -292,18 +292,20 @@ func (m Model) View() string {
 	switch m.mode {
 	case viewSessions:
 		content = renderSessionsList(m.sessions, m.cursor, m.width, m.height)
+		// Ordered by how much a reader needs it: the footer drops from the end
+		// on a narrow terminal, so anything that must stay visible comes first.
 		helpKeys = []helpKey{
-			{"↑/↓", "navigate"},
-			{"→/enter/space", "open"},
+			{"↑/↓", "move"},
+			{"enter", "open"},
+			{"R", "replay"},
+			{"T", "tree"},
 			{"s", "summary"},
 			{"p", "project"},
 			{"c", "continue"},
-			{"R", "replay"},
-			{"T", "tree"},
 			{"n", "new"},
+			{"d", "delete"},
 			{"y", "yank"},
 			{"F", "fork"},
-			{"d", "delete"},
 			{"r", "refresh"},
 			{"q", "quit"},
 		}
@@ -325,18 +327,18 @@ func (m Model) View() string {
 			followLabel = "follow ●"
 		}
 		helpKeys = []helpKey{
-			{"↑/↓", "navigate"},
-			{"→/enter", "expand"},
-			{"←", "back"},
-			{"/", "search"},
-			{"tab", "filter: " + m.eventFilter.label()},
-			{"N", "next fail"},
-			{"s", "summary"},
+			{"↑/↓", "move"},
+			{"enter", "expand"},
 			{"R", "replay"},
 			{"T", "tree"},
+			{"/", "search"},
+			{"tab", m.eventFilter.label()},
+			{"N", "next fail"},
+			{"s", "summary"},
 			{"c", "continue"},
 			{"d", "delete"},
 			{"f", followLabel},
+			{"←", "back"},
 			{"q", "quit"},
 		}
 
@@ -395,14 +397,19 @@ func (m Model) View() string {
 		if m.replayLive {
 			liveLabel = "live ●"
 		}
+		codeLabel := "code only"
+		if m.replayCodeOnly {
+			codeLabel = "all steps"
+		}
 		helpKeys = []helpKey{
 			{"space", playLabel},
 			{"→/←", "step"},
-			{"↑/↓", "scroll"},
+			{"T", "tree"},
+			{"tab", codeLabel},
 			{"+/-", "speed"},
 			{"/", "go to step"},
+			{"↑/↓", "scroll"},
 			{"0", "restart"},
-			{"tab", "code only"},
 			{"f", liveLabel},
 			{"t", "timeline"},
 			{"esc", "back"},
@@ -422,6 +429,7 @@ func (m Model) View() string {
 			{"→/←", "open/close"},
 			{"space", "play"},
 			{"tab", changedLabel},
+			{"enter", "jump to change"},
 			{"R", "replay"},
 			{"esc", "back"},
 			{"q", "quit"},
@@ -552,7 +560,10 @@ func usableWidth(width int) int {
 // the difference between "nothing is happening" and "nothing has happened for
 // four minutes".
 func (m Model) footer(help string, keys []helpKey) string {
-	right := mutedStyle.Render(m.footerStatus())
+	// The status gets at most a third of the row. On an 80-column terminal the
+	// full version of it is 36 columns, which was enough to push real
+	// keybindings off the footer — the keys are what the reader acts on.
+	right := mutedStyle.Render(m.footerStatus(usableWidth(m.width) / 3))
 
 	// Build the keybindings to fit what is left after the status. The sessions
 	// list has a dozen of them, which is wider than an 80- or 100-column
@@ -579,17 +590,25 @@ func (m Model) footer(help string, keys []helpKey) string {
 }
 
 // footerStatus is the right-hand text: how long ago the open session was
-// written, the time now, and the version.
-func (m Model) footerStatus() string {
-	parts := make([]string, 0, 3)
-
+// written, the time now, and the version — as much of it as fits in budget.
+//
+// Dropped least-useful first. The age of the open session is the one that earns
+// its place, because it is what tells a live session apart from one that stopped
+// four minutes ago; the version is the one nobody reads twice.
+func (m Model) footerStatus(budget int) string {
+	var parts []string
 	if sess := m.selectedSession; sess != nil && !sess.Info.LastUpdate.IsZero() {
 		parts = append(parts, "updated "+agoShort(time.Since(sess.Info.LastUpdate)))
 	}
-	parts = append(parts, time.Now().Format("15:04:05"))
-	parts = append(parts, "v"+m.version)
+	parts = append(parts, time.Now().Format("15:04:05"), "v"+m.version)
 
-	return strings.Join(parts, " · ") + " "
+	for n := len(parts); n > 0; n-- {
+		out := strings.Join(parts[:n], " · ") + " "
+		if len(out) <= budget {
+			return out
+		}
+	}
+	return ""
 }
 
 // agoShort renders an elapsed duration in as few characters as possible, for a
@@ -1169,11 +1188,18 @@ func renderHelpFit(keys []helpKey, width int) string {
 	if width <= 0 || visibleLen(full) <= width {
 		return full
 	}
+	// The last binding is always kept. It is "quit" in every view, and a footer
+	// that has dropped the way out is worse than one that has dropped anything
+	// else.
+	last := keys[len(keys)-1]
 	for n := len(keys) - 1; n > 0; n-- {
-		candidate := renderHelp(keys[:n]) + mutedStyle.Render(" …")
+		candidate := renderHelp(keys[:n]) + mutedStyle.Render(" … ") + renderHelp([]helpKey{last})
 		if visibleLen(candidate) <= width {
 			return candidate
 		}
+	}
+	if only := renderHelp([]helpKey{last}); visibleLen(only) <= width {
+		return only
 	}
 	return truncateVisible(full, width)
 }

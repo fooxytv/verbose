@@ -545,15 +545,14 @@ func TestFooterFitsAndRightAligns(t *testing.T) {
 			t.Errorf("width %d: footer occupies %d columns, want at most %d\n  %q",
 				w, n, w-1, stripAnsi(got))
 		}
-		// Where there is room, the status must actually be on the right.
-		if w >= 80 {
-			plain := stripAnsi(got)
-			if !strings.Contains(plain, "1m ago") {
-				t.Errorf("width %d: footer lost the session age: %q", w, plain)
-			}
-			if !strings.HasSuffix(strings.TrimRight(plain, " "), "v0.12.2") {
-				t.Errorf("width %d: version should end the row: %q", w, plain)
-			}
+		plain := stripAnsi(got)
+		// The age earns its place first: it is what tells a live session from
+		// one that stopped. The version is dropped before it is.
+		if w >= 80 && !strings.Contains(plain, "1m ago") {
+			t.Errorf("width %d: footer lost the session age: %q", w, plain)
+		}
+		if w >= 120 && !strings.HasSuffix(strings.TrimRight(plain, " "), "v0.12.2") {
+			t.Errorf("width %d: version should end the row: %q", w, plain)
 		}
 	}
 }
@@ -567,6 +566,36 @@ func TestFooterWithoutSession(t *testing.T) {
 	}
 	if !strings.Contains(plain, "v1.2.3") {
 		t.Errorf("version missing: %q", plain)
+	}
+}
+
+// The status is dropped least-useful first, so a narrow terminal keeps the
+// session age and loses the version rather than the other way round.
+func TestFooterStatusDegradesByUsefulness(t *testing.T) {
+	m := Model{width: 200, version: "9.9.9", selectedSession: &session.Session{
+		Info: session.SessionInfo{LastUpdate: time.Now().Add(-30 * time.Second)},
+	}}
+
+	full := m.footerStatus(100)
+	for _, want := range []string{"30s ago", "v9.9.9"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("with room, status = %q, missing %q", full, want)
+		}
+	}
+
+	tight := m.footerStatus(20)
+	if !strings.Contains(tight, "30s ago") {
+		t.Errorf("tight status = %q, should keep the age", tight)
+	}
+	if strings.Contains(tight, "v9.9.9") {
+		t.Errorf("tight status = %q, should have dropped the version", tight)
+	}
+	if len(tight) > 20 {
+		t.Errorf("tight status is %d columns, over its 20 budget: %q", len(tight), tight)
+	}
+
+	if got := m.footerStatus(3); got != "" {
+		t.Errorf("with no room at all, status = %q, want empty", got)
 	}
 }
 
