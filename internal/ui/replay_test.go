@@ -1586,3 +1586,126 @@ func TestTreeFocusPrefersTheMostRecentStep(t *testing.T) {
 		t.Errorf("focus = %d before anything happened, want -1", got)
 	}
 }
+
+// The diff panel must obey the same layout invariants as everything else, in
+// both views it can open from and at both the two-column and unified widths.
+func TestDiffPanelNeverOverflows(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "src", "main.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	long := strings.Repeat("a very long line of code that will not fit ", 4)
+	sess := &session.Session{
+		Info: session.SessionInfo{ID: "t", Title: "t", CWD: root},
+		Events: []session.Event{
+			{Type: session.EventToolUse, ToolName: "Edit",
+				ToolInput: map[string]interface{}{"file_path": path},
+				Result: &session.ToolResult{FilePath: path,
+					StructuredPatch: []session.PatchHunk{{
+						OldStart: 1, OldLines: 3, NewStart: 1, NewLines: 4,
+						Lines: []string{
+							" \tcontext with a tab",
+							"-" + long,
+							"+" + long + " changed",
+							"+extra added line",
+							"-removed with no partner",
+						},
+					}}},
+			},
+		},
+	}
+
+	m := Model{version: "0.0.0"}
+	m.replaySteps = session.BuildReplay(sess)
+	m.loadTreeFor(sess)
+	m.replayIndex = len(m.replaySteps) - 1
+	m.diffPath = path
+
+	for _, mode := range []viewMode{viewReplay, viewTree} {
+		for _, split := range []bool{false, true} {
+			for _, size := range []struct{ w, h int }{{60, 12}, {100, 24}, {160, 30}, {220, 40}} {
+				v := m
+				v.mode = mode
+				v.treeSplit = split
+				v.width, v.height = size.w, size.h
+
+				rows := visibleLines(v.View())
+				if len(rows) > size.h {
+					t.Errorf("mode %v split=%v at %dx%d: %d rows, want at most %d",
+						mode, split, size.w, size.h, len(rows), size.h)
+				}
+				for i, r := range rows {
+					if n := terminalColumns(r); n >= size.w {
+						t.Fatalf("mode %v split=%v at %dx%d: row %d draws %d columns\n  %q",
+							mode, split, size.w, size.h, i, n, stripAnsi(r))
+					}
+				}
+			}
+		}
+	}
+}
+
+// Two columns need width; below the threshold the panel says so and falls back
+// to a single column rather than showing two unreadable ones.
+func TestDiffFallsBackToUnifiedWhenNarrow(t *testing.T) {
+	m := treeModel(t)
+	m.diffPath = m.treeRows()[1].node.Path
+
+	wide := m.diffViewState(diffSideBySideMin, 24)
+	if wide.unified {
+		t.Error("at the threshold the panel should still be two columns")
+	}
+	narrow := m.diffViewState(diffSideBySideMin-1, 24)
+	if !narrow.unified {
+		t.Error("below the threshold it should fall back to one column")
+	}
+}
+
+// The diff is bounded by the replay position, exactly as the tree's colours
+// are, and says so rather than looking empty.
+func TestDiffIsBoundedByReplayPosition(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.go")
+	if err := os.WriteFile(path, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session.Session{
+		Info: session.SessionInfo{CWD: root},
+		Events: []session.Event{
+			{Type: session.EventUserPrompt, UserText: "go"},
+			{Type: session.EventToolUse, ToolName: "Bash",
+				ToolInput: map[string]interface{}{"command": "echo hi"}},
+			{Type: session.EventToolUse, ToolName: "Edit",
+				ToolInput: map[string]interface{}{"file_path": path},
+				Result: &session.ToolResult{FilePath: path,
+					StructuredPatch: []session.PatchHunk{{Lines: []string{"+new"}}}}},
+		},
+	}
+	m := Model{width: 160, height: 24, version: "0.0.0"}
+	m.replaySteps = session.BuildReplay(sess)
+	m.loadTreeFor(sess)
+	m.diffPath = path
+
+	m.replayIndex = 0
+	early := m.diffViewState(100, 24)
+	if len(early.changes) != 0 {
+		t.Errorf("at the first step the diff shows %d changes, want none", len(early.changes))
+	}
+	if early.later != 1 {
+		t.Errorf("later = %d, want 1 so the panel can explain itself", early.later)
+	}
+	if out := renderFileDiff(early); !strings.Contains(stripAnsi(out), "Not changed yet") {
+		t.Errorf("empty panel should say the change has not happened yet:\n%s", stripAnsi(out))
+	}
+
+	m.replayIndex = len(m.replaySteps) - 1
+	late := m.diffViewState(100, 24)
+	if len(late.changes) != 1 {
+		t.Errorf("at the end the diff shows %d changes, want 1", len(late.changes))
+	}
+}

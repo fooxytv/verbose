@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -322,5 +323,84 @@ func TestTreePathsCollectsFilesOnly(t *testing.T) {
 	}
 	if got := TreePaths(nil); len(got) != 0 {
 		t.Errorf("TreePaths(nil) = %v, want empty", got)
+	}
+}
+
+// A heredoc body is data, not commands. Scanning it found whatever the data
+// contained: a Go test fixture with the literal text "rm foo.txt" in it was
+// read as a deletion, and source mentioning filenames as the shell reading
+// them. Seventeen nonsense paths came from one session this way.
+func TestHeredocBodiesAreNotScannedForCommands(t *testing.T) {
+	cmd := "cat > fixture_test.go <<'EOF'\n" +
+		"cases := []string{\"rm foo.txt\", \"rm -rf build/out.js\"}\n" +
+		"_ = shellRemovals(c.cmd)\n" +
+		"EOF\n" +
+		"rm actually-removed.txt"
+
+	got := shellRemovals(cmd)
+	if len(got) != 1 || got[0] != "actually-removed.txt" {
+		t.Errorf("shellRemovals = %v, want just the real command outside the heredoc", got)
+	}
+
+	if stripped := stripHeredocBodies(cmd); strings.Contains(stripped, "foo.txt") {
+		t.Errorf("stripped command still contains the body: %q", stripped)
+	}
+}
+
+func TestStripHeredocBodies(t *testing.T) {
+	cases := []struct{ name, in, wantOut string }{
+		{"no heredoc", "ls -la", "ls -la"},
+		// The terminator goes with the body: it is part of the heredoc, not a
+		// command.
+		{"one heredoc", "cat > a <<'E'\nbody\nE", "cat > a <<'E'"},
+		{"two heredocs", "cat > a <<'E'\nx\nE\ncat > b <<'F'\ny\nF",
+			"cat > a <<'E'\ncat > b <<'F'"},
+		{"unterminated", "cat > a <<'E'\nx\ny", "cat > a <<'E'"},
+	}
+	for _, c := range cases {
+		if got := stripHeredocBodies(c.in); got != c.wantOut {
+			t.Errorf("%s: stripHeredocBodies = %q, want %q", c.name, got, c.wantOut)
+		}
+	}
+}
+
+func TestPlausiblePathRejectsFragments(t *testing.T) {
+	for _, bad := range []string{
+		"", "/", ".", "..", "-rf", "/repo/-flag",
+		"/repo/len(c.want)", "/repo/c.name,", "/repo/got,",
+		"/repo/a b.go", "/repo/$VAR", "/repo/x;y",
+	} {
+		if plausiblePath(bad) {
+			t.Errorf("plausiblePath(%q) = true, want false", bad)
+		}
+	}
+	for _, good := range []string{
+		"/repo/main.go", "src/a.ts", "/repo/.github/workflows/ci.yml",
+		"/repo/a-b_c.go", "Makefile",
+	} {
+		if !plausiblePath(good) {
+			t.Errorf("plausiblePath(%q) = false, want true", good)
+		}
+	}
+}
+
+// A command often has rm on a line of its own, which a start-of-string anchor
+// misses entirely.
+func TestShellRemovalsFindsRmOnItsOwnLine(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+		want      int
+	}{
+		{"own line", "cd /repo\nrm stale.txt\necho done", 1},
+		{"after &&", "go build ./... && rm tmp.out", 1},
+		{"after ;", "ls; rm a.txt", 1},
+		{"several lines", "rm one.txt\nrm two.txt", 2},
+		{"first line", "rm only.txt", 1},
+	}
+	for _, c := range cases {
+		if got := shellRemovals(c.cmd); len(got) != c.want {
+			t.Errorf("%s: shellRemovals(%q) = %v, want %d path(s)",
+				c.name, c.cmd, got, c.want)
+		}
 	}
 }

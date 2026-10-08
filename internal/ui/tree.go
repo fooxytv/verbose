@@ -633,6 +633,10 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "d", "D":
+		m.openDiff()
+		return m, clearStatusAfter()
+
 	case "tab":
 		m.treeChangedOnly = !m.treeChangedOnly
 		m.treeCursor = 0
@@ -884,6 +888,8 @@ func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
 		m.treeToggleAt(true)
 	case "{", "ctrl+left":
 		m.treeToggleAt(false)
+	case "d", "D":
+		m.openDiff()
 	case "ctrl+f":
 		// Hand the follow back to the replay.
 		m.treeFollow = true
@@ -892,4 +898,133 @@ func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
 	}
 	m.treeGen++
 	return true
+}
+
+// Opening a diff from the tree.
+
+// openDiff shows what the session did to the file under the tree cursor.
+//
+// Playback stops: reading a diff and watching code stream are not things anyone
+// does at once, and the pane the diff needs is the one the replay was using.
+func (m *Model) openDiff() {
+	rows := m.treeRows()
+	if m.treeCursor >= len(rows) {
+		return
+	}
+	node := rows[m.treeCursor].node
+	if node.IsDir {
+		return
+	}
+
+	m.diffPath = node.Path
+	m.diffScroll = 0
+	m.replayPlaying = false
+	m.replayTyped = -1
+	m.replayGen++
+
+	if len(m.diffChanges()) == 0 {
+		// Still open it: the panel explains that a file can be touched without
+		// leaving a diff, which is more use than nothing happening.
+		m.statusMsg = "No recorded diff for " +
+			session.ShortPath(node.Path, m.selectedSession.Info.CWD)
+	}
+}
+
+// closeDiff returns to whatever was showing before.
+func (m *Model) closeDiff() {
+	m.diffPath = ""
+	m.diffScroll = 0
+}
+
+// diffChanges is what the session did to the open file, bounded by where the
+// replay has reached so a diff cannot give away work still to come.
+func (m Model) diffChanges() []session.FileChange {
+	return session.FileChanges(m.selectedSession, m.diffPath, m.treeUpto())
+}
+
+// diffViewState assembles the diff renderer's inputs at a given size.
+func (m Model) diffViewState(width, height int) fileDiffView {
+	changes := m.diffChanges()
+	cwd := ""
+	if m.selectedSession != nil {
+		cwd = m.selectedSession.Info.CWD
+	}
+	return fileDiffView{
+		path:    m.diffPath,
+		cwd:     cwd,
+		changes: changes,
+		rows:    diffRows(changes),
+		scroll:  m.diffScroll,
+		unified: width < diffSideBySideMin,
+		later:   len(session.FileChanges(m.selectedSession, m.diffPath, -1)) - len(changes),
+		width:   width,
+		height:  height,
+	}
+}
+
+// renderDiffSplit draws the tree beside the diff, or the diff alone when the
+// terminal cannot take both.
+func renderDiffSplit(m Model) string {
+	rows := max(1, m.height-1)
+	side := sidebarWidth(m.width)
+	if side == 0 {
+		return renderFileDiff(m.diffViewState(usableWidth(m.width), rows))
+	}
+	main := usableWidth(m.width) - side - 3
+	tree := renderTree(m.treeViewState(side, rows))
+	diff := renderFileDiff(m.diffViewState(main, rows))
+	return joinPanes(tree, diff, side, main, rows)
+}
+
+// handleDiffKey consumes keys while the diff panel is open. It is modal: the
+// panel is what the reader is looking at, so the arrows scroll it rather than
+// the view underneath.
+func (m Model) handleDiffKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	visible := max(1, m.height-6)
+
+	switch key {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+
+	case "esc", "backspace", "d", "D":
+		m.closeDiff()
+		return m, nil
+
+	case "down", "j":
+		m.diffScroll++
+		return m, nil
+
+	case "up", "k":
+		m.diffScroll = max(0, m.diffScroll-1)
+		return m, nil
+
+	case "shift+down", "pgdown":
+		m.diffScroll += visible
+		return m, nil
+
+	case "shift+up", "pgup":
+		m.diffScroll = max(0, m.diffScroll-visible)
+		return m, nil
+
+	case "g", "home":
+		m.diffScroll = 0
+		return m, nil
+
+	case "G", "end":
+		m.diffScroll = len(diffRows(m.diffChanges()))
+		return m, nil
+
+	// Browsing: move the tree selection and the diff follows, so several files
+	// can be compared without closing the panel each time.
+	case "]", "[":
+		step := 1
+		if key == "[" {
+			step = -1
+		}
+		m.treeMove(step, m.height-1)
+		m.openDiff()
+		return m, nil
+	}
+
+	return m, nil
 }

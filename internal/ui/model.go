@@ -81,6 +81,11 @@ type Model struct {
 	// treeFollow keeps the tree scrolled to the change the replay has reached.
 	// Turned off when the reader moves the cursor themselves.
 	treeFollow bool
+
+	// The diff panel, opened from the tree with "d". Empty when closed; it
+	// takes the replay's pane while it is open.
+	diffPath   string
+	diffScroll int
 	// treeGen invalidates fade ticks left over from an earlier step.
 	treeGen int
 
@@ -376,9 +381,12 @@ func (m Model) View() string {
 
 	case viewReplay:
 		if m.selectedSession != nil {
-			if m.treeSplit {
+			switch {
+			case m.diffPath != "":
+				content = renderDiffSplit(m)
+			case m.treeSplit:
 				content = renderSplit(m)
-			} else {
+			default:
 				content = renderReplay(m.replayViewState(m.width, m.height))
 			}
 		}
@@ -414,6 +422,7 @@ func (m Model) View() string {
 			}
 			helpKeys = append(helpKeys,
 				helpKey{"[/]", "tree"},
+				helpKey{"d", "diff"},
 				helpKey{"{/}", "fold"},
 				helpKey{"ctrl+f", followLabel},
 			)
@@ -432,7 +441,11 @@ func (m Model) View() string {
 
 	case viewTree:
 		if m.selectedSession != nil {
-			content = renderTree(m.treeViewState(usableWidth(m.width), m.height))
+			if m.diffPath != "" {
+				content = renderDiffSplit(m)
+			} else {
+				content = renderTree(m.treeViewState(usableWidth(m.width), m.height))
+			}
 		}
 		changedLabel := "changed only"
 		if m.treeChangedOnly {
@@ -440,6 +453,7 @@ func (m Model) View() string {
 		}
 		helpKeys = []helpKey{
 			{"↑/↓", "move"},
+			{"d", "diff"},
 			{"→/←", "open/close"},
 			{"space", "play"},
 			{"tab", changedLabel},
@@ -471,6 +485,15 @@ func (m Model) View() string {
 	switch {
 	case m.confirmDelete != nil:
 		help = deletePrompt(*m.confirmDelete)
+	case m.diffPath != "" && m.statusMsg == "":
+		helpKeys = []helpKey{
+			{"↑/↓", "scroll"},
+			{"[/]", "next file"},
+			{"d/esc", "close"},
+			{"g/G", "top/end"},
+			{"q", "quit"},
+		}
+		help = ""
 	case m.statusMsg != "":
 		help = statusStyle.Render(m.statusMsg)
 	}
@@ -655,6 +678,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// every letter of the query would trigger a command.
 	if m.searchTyping {
 		return m.handleSearchKey(msg, key)
+	}
+
+	// The diff panel is modal: while it is open the arrows scroll it, not
+	// whatever is underneath.
+	if m.diffPath != "" {
+		return m.handleDiffKey(msg, key)
 	}
 
 	// Replay owns its keys: stepping, scrolling and speed all reuse letters

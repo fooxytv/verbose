@@ -186,7 +186,7 @@ func BuildFileActivity(sess *Session) map[string]*FileActivity {
 			// A shell write records no diff and no indication of whether the
 			// file already existed, so it is reported as neither created nor
 			// edited — just written, and marked inferred.
-			if p, body := shellHeredoc(cmd); p != "" && body != "" {
+			if p, body := shellHeredoc(cmd); body != "" && plausiblePath(p) {
 				add(p, FileTouch{EventIndex: i, Kind: TouchWrite,
 					LinesAdded: strings.Count(body, "\n") + 1, Inferred: true})
 			}
@@ -204,8 +204,54 @@ func BuildFileActivity(sess *Session) map[string]*FileActivity {
 	return out
 }
 
+// stripHeredocBodies removes the contents of any heredoc from a command, and
+// its terminator, leaving only the parts the shell actually executes.
+//
+// A heredoc body is data. Scanning it for commands finds whatever the data
+// happens to contain: a Go test fixture with the string "rm foo.txt" in it was
+// read as a deletion, and source code mentioning filenames was read as the
+// shell reading those files. Seventeen nonsense paths were recorded this way
+// from one session, several of them fragments of Go expressions.
+func stripHeredocBodies(cmd string) string {
+	lines := strings.Split(cmd, "\n")
+	var out []string
+	marker := ""
+	for _, l := range lines {
+		if marker != "" {
+			if strings.TrimSpace(l) == marker {
+				marker = ""
+			}
+			continue
+		}
+		out = append(out, l)
+		if m := heredocStart.FindStringSubmatch(l); m != nil {
+			marker = m[2]
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// plausiblePath rejects a path recovered from a shell command that cannot be
+// one: a flag, a fragment of an expression, a bare separator.
+//
+// Applied only to inferred paths. A path a tool reported is taken as given —
+// real filenames do contain spaces and brackets — but one scraped out of a
+// command line has to earn it.
+func plausiblePath(path string) bool {
+	if path == "" || path == "/" {
+		return false
+	}
+	base := filepath.Base(path)
+	if base == "" || base == "." || base == ".." || strings.HasPrefix(base, "-") {
+		return false
+	}
+	return !strings.ContainsAny(path, "\"'`$;|&<>()*?,\t\n ")
+}
+
 // rmCommand matches an `rm` invocation and captures its arguments.
-var rmCommand = regexp.MustCompile(`(?:^|[;&|]\s*|&&\s*)rm\s+((?:-[a-zA-Z]+\s+)*)([^;&|]+)`)
+// (?m) so that ^ matches the start of each line: a command often has rm on a
+// line of its own, which a start-of-string anchor misses entirely.
+var rmCommand = regexp.MustCompile(`(?m)(?:^|[;&|]\s*)rm\s+((?:-[a-zA-Z]+\s+)*)([^;&|\n]+)`)
 
 // shellRemovals names the files an `rm` deleted, when the command is simple
 // enough to be sure.
@@ -216,13 +262,16 @@ var rmCommand = regexp.MustCompile(`(?:^|[;&|]\s*|&&\s*)rm\s+((?:-[a-zA-Z]+\s+)*
 // reporting the wrong file as deleted is worse than reporting nothing.
 func shellRemovals(cmd string) []string {
 	var out []string
-	for _, m := range rmCommand.FindAllStringSubmatch(cmd, -1) {
+	for _, m := range rmCommand.FindAllStringSubmatch(stripHeredocBodies(cmd), -1) {
 		for _, arg := range strings.Fields(m[2]) {
 			if strings.HasPrefix(arg, "-") {
 				continue
 			}
 			if strings.ContainsAny(arg, "*?[]{}$`\"'~") {
 				continue // a glob or an expansion: which files is unknowable here
+			}
+			if !plausiblePath(arg) {
+				continue
 			}
 			out = append(out, arg)
 		}
@@ -447,9 +496,9 @@ func AttachShellReads(activity map[string]*FileActivity, sess *Session, exists f
 			continue
 		}
 
-		for _, token := range shellPathToken.FindAllString(cmd, -1) {
+		for _, token := range shellPathToken.FindAllString(stripHeredocBodies(cmd), -1) {
 			path := absolutePath(strings.Trim(token, `"'`), sess.Info.CWD)
-			if !exists(path) {
+			if !plausiblePath(path) || !exists(path) {
 				continue
 			}
 			a := activity[path]

@@ -139,6 +139,7 @@ In the replay view:
 | `↑`/`↓`, `j`/`k` | Move the tree selection (full-screen tree) |
 | `]` / `[` | Move the tree selection (with the sidebar open) |
 | `}` / `{` | Open / close a directory in the sidebar |
+| `d` | Open the selected file's diff (`d` or `Esc` closes) |
 | `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
 
@@ -256,6 +257,27 @@ second into their colour — so the project assembles itself in front of you.
 Step back in the replay and later work disappears again. Moving the cursor
 yourself takes over from the follow; `Space` hands it back. The sidebar has no
 cursor of its own, so it always follows.
+
+### Diffs
+
+With a file selected in the tree, **`d` opens its diff** in the right-hand
+pane — old on the left, new on the right, with line numbers, pairing each
+removed line against the one that replaced it. `[` and `]` step to the next
+file and the diff follows, so a run of changes can be read without closing it.
+`d` or `Esc` closes it.
+
+Opening a diff pauses playback: reading a diff and watching code stream are not
+things anyone does at once, and the pane the diff needs is the one the replay
+was using. Two columns need **86 columns of pane**; below that it falls back to
+a unified single column and says so.
+
+Like the tree's colours, the diff is bounded by where the replay has reached —
+it shows what had happened by that point, not what is still to come. For a file
+whose changes come later it says so and tells you how many.
+
+A **new** file has no previous version to compare against, so it is shown as
+all-additions rather than a two-sided diff. The same goes for a file written
+through the shell, where no diff is recorded at all.
 
 ### Side by side
 
