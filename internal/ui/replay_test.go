@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1105,5 +1106,147 @@ func TestPadPaneExactWidth(t *testing.T) {
 		if got := terminalColumns(out); got != 20 {
 			t.Errorf("padPane(%q) is %d columns, want 20", stripAnsi(in), got)
 		}
+	}
+}
+
+// A project tree is far longer than the pane showing it, so the file being
+// changed has to be scrolled to. Without this, 74 of the 90 steps that lit a
+// file in one real session lit one below the fold and the highlight was never
+// seen at all.
+func TestTreeFollowsTheChangeIntoView(t *testing.T) {
+	root := t.TempDir()
+	// Enough files that the tree cannot fit in the pane.
+	var paths []string
+	for i := 0; i < 60; i++ {
+		p := filepath.Join(root, "src", fmt.Sprintf("file%02d.go", i))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+
+	// Edit them in order, so the change marches down the tree.
+	var events []session.Event
+	for _, p := range paths {
+		events = append(events, session.Event{
+			Type: session.EventToolUse, ToolName: "Edit",
+			ToolInput: map[string]interface{}{"file_path": p},
+			Result: &session.ToolResult{FilePath: p,
+				StructuredPatch: []session.PatchHunk{{Lines: []string{"+a"}}}},
+		})
+	}
+	sess := &session.Session{
+		Info:   session.SessionInfo{ID: "t", Title: "t", CWD: root},
+		Events: events,
+	}
+
+	m := Model{width: 140, height: 20, version: "0.0.0"}
+	m.replaySteps = session.BuildReplay(sess)
+	m.loadTreeFor(sess)
+	m.treeSplit = true
+
+	side := sidebarWidth(m.width)
+	if side == 0 {
+		t.Fatal("140 columns should split")
+	}
+
+	for i := range m.replaySteps {
+		m.replayIndex = i
+		v := m.treeViewState(side, m.height-1)
+		at := m.treeFocusRow(v.rows, m.treeUpto())
+		if at < 0 {
+			t.Fatalf("step %d: no focusable change, but every step edits a file", i)
+		}
+		visible := treeVisibleRows(v.height)
+		if at < v.scroll || at >= v.scroll+visible {
+			t.Fatalf("step %d: focused row %d is outside the visible window [%d,%d)",
+				i, at, v.scroll, v.scroll+visible)
+		}
+	}
+}
+
+// Moving the cursor in the full-screen tree takes over; the split has no cursor
+// of its own to fight with, so it always follows.
+func TestTreeFollowStopsOnManualNavigation(t *testing.T) {
+	m := treeModel(t)
+	m.replayPlaying = true
+	if !m.treeFollowing() {
+		t.Fatal("a playing tree should follow the change")
+	}
+
+	res, _ := m.handleTreeKey(namedKey(tea.KeyDown), "down")
+	m = res.(Model)
+	if m.treeFollowing() {
+		t.Error("moving the cursor should hand control to the reader")
+	}
+
+	// Asking it to play is asking to watch, so following resumes. (It was
+	// already playing, so space pauses first.)
+	res, _ = m.handleTreeKey(tea.KeyMsg{Type: tea.KeySpace}, " ")
+	m = res.(Model)
+	if m.replayPlaying {
+		t.Fatal("the first space should pause")
+	}
+	res, _ = m.handleTreeKey(tea.KeyMsg{Type: tea.KeySpace}, " ")
+	m = res.(Model)
+	if !m.replayPlaying || !m.treeFollowing() {
+		t.Error("playing again should resume following")
+	}
+
+	// In the split there is no tree cursor, so it follows regardless.
+	m.treeFollow = false
+	m.replayPlaying = false
+	m.treeSplit = true
+	if !m.treeFollowing() {
+		t.Error("the sidebar always follows")
+	}
+}
+
+// The flash has to leave a mark. A change that has settled is still coloured as
+// a change, not returned to neutral.
+func TestTreeFlashSettlesIntoAPersistentMark(t *testing.T) {
+	path := "/repo/a.go"
+	mk := func(kind session.TouchKind) treeView {
+		return treeView{
+			activity: map[string]*session.FileActivity{
+				path: {Path: path, Touches: []session.FileTouch{{EventIndex: 3, Kind: kind}}},
+			},
+			upto: 3, justNow: 3,
+		}
+	}
+	row := treeRow{node: &session.TreeNode{Name: "a.go", Path: path}}
+
+	for _, kind := range []session.TouchKind{
+		session.TouchCreate, session.TouchEdit, session.TouchWrite, session.TouchDelete,
+	} {
+		v := mk(kind)
+
+		// Fresh: lit.
+		v.fade = 0
+		fresh, _ := treeRowStyle(v, row)
+		if !fresh.GetReverse() {
+			t.Errorf("%v: a change should be lit when it first lands", kind)
+		}
+
+		// Settled: still marked, and in the colour for its kind.
+		v.fade = treeFadeStages
+		settled, _ := treeRowStyle(v, row)
+		if settled.GetReverse() {
+			t.Errorf("%v: the flash should not stay reversed", kind)
+		}
+		if settled.GetForeground() == mutedStyle.GetForeground() {
+			t.Errorf("%v: a settled change must keep a mark, not go neutral", kind)
+		}
+	}
+
+	// An untouched file in the same tree stays neutral.
+	v := mk(session.TouchEdit)
+	other := treeRow{node: &session.TreeNode{Name: "b.go", Path: "/repo/b.go"}}
+	style, _ := treeRowStyle(v, other)
+	if style.GetForeground() != mutedStyle.GetForeground() {
+		t.Error("a file the session never touched should stay dim")
 	}
 }

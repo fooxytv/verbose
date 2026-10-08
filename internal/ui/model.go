@@ -76,8 +76,11 @@ type Model struct {
 	treeCursor      int
 	treeScroll      int
 	treeChangedOnly bool
-	// treeSplit shows the tree beside the replay instead of instead of it.
+	// treeSplit shows the tree beside the replay rather than instead of it.
 	treeSplit bool
+	// treeFollow keeps the tree scrolled to the change the replay has reached.
+	// Turned off when the reader moves the cursor themselves.
+	treeFollow bool
 	// treeGen invalidates fade ticks left over from an earlier step.
 	treeGen int
 

@@ -165,15 +165,18 @@ var (
 			Foreground(colorGreen).
 			Bold(true)
 
-	// A file this session changed.
+	// A file this session changed. Orange rather than yellow: the mark a flash
+	// leaves behind has to stay legible beside the green of a new file, and
+	// yellow sat too close to it.
 	changedStyle = lipgloss.NewStyle().
-			Foreground(colorYellow).
+			Foreground(colorOrange).
 			Bold(true)
 
 	// A file this session removed. Deletion is inferred from shell commands,
 	// never recorded, so this is the one state that can be wrong.
 	deletedStyle = lipgloss.NewStyle().
-			Foreground(colorRed)
+			Foreground(colorRed).
+			Bold(true)
 
 	// A file the session read but did not change.
 	readStyle = lipgloss.NewStyle().

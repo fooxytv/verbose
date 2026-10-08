@@ -179,9 +179,7 @@ func renderTree(v treeView) string {
 		return b.String()
 	}
 
-	// Chrome above and below the rows: the title, the legend, a blank line and
-	// the "… N more" note, plus the footer the frame reserves.
-	visible := max(1, v.height-5)
+	visible := treeVisibleRows(v.height)
 	scroll := clampInt(v.scroll, 0, max(0, len(v.rows)-visible))
 	end := min(len(v.rows), scroll+visible)
 
@@ -389,6 +387,7 @@ func (m *Model) loadTreeFor(sess *session.Session) {
 	}
 	m.treeCursor = 0
 	m.treeScroll = 0
+	m.treeFollow = true
 }
 
 // treeViewState assembles what the renderer needs, including the rows, which
@@ -396,6 +395,20 @@ func (m *Model) loadTreeFor(sess *session.Session) {
 func (m Model) treeViewState(width, height int) treeView {
 	upto := m.treeUpto()
 	rows := flattenTree(m.treeRoot, m.treeCollapsed, m.treeActivity, upto, m.treeChangedOnly)
+
+	cursor := clampInt(m.treeCursor, 0, max(0, len(rows)-1))
+	scroll := m.treeScroll
+
+	// Follow the change. A project tree is far longer than the pane showing it
+	// — 122 rows into 22 — so without this the file being written is usually
+	// below the fold and its highlight is never seen. Measured on one session,
+	// 74 of the 90 steps that light a file lit one off screen.
+	if m.treeFollowing() {
+		if at := m.treeFocusRow(rows, upto); at >= 0 {
+			cursor = at
+			scroll = scrollToShow(at, len(rows), treeVisibleRows(height))
+		}
+	}
 
 	return treeView{
 		sess:      m.selectedSession,
@@ -405,12 +418,72 @@ func (m Model) treeViewState(width, height int) treeView {
 		justNow:   upto,
 		fade:      treeFadeStage(time.Since(m.replayStepAt)),
 		rows:      rows,
-		cursor:    clampInt(m.treeCursor, 0, max(0, len(rows)-1)),
-		scroll:    m.treeScroll,
+		cursor:    cursor,
+		scroll:    scroll,
 		changedOn: m.treeChangedOnly,
 		width:     width,
 		height:    height,
 	}
+}
+
+// treeFollowing reports whether the tree should move itself to the change.
+//
+// Always in the split, where every key belongs to the replay and there is no
+// tree cursor to fight with. In the full-screen tree, only until the reader
+// takes over by moving the cursor.
+func (m Model) treeFollowing() bool {
+	if m.treeSplit {
+		return true
+	}
+	return m.treeFollow && m.replayPlaying
+}
+
+// treeFocusRow is the row the tree should be showing: the most recent change at
+// or before where the replay has reached, that actually has a row.
+//
+// Two deliberate choices. The most recent change rather than only a change at
+// this exact step, because most steps touch no file at all — 290 of 380 in one
+// session — and snapping back to the top of the tree in between would be worse
+// than staying on the last thing that happened. And only changes with a row,
+// because a session writes plenty of files outside its project: scratch files
+// under /private/tmp have no place in the tree, and focusing one would leave
+// the view parked wherever it happened to be.
+func (m Model) treeFocusRow(rows []treeRow, upto int) int {
+	rowOf := make(map[string]int, len(rows))
+	for i, r := range rows {
+		if !r.node.IsDir {
+			rowOf[r.node.Path] = i
+		}
+	}
+
+	best, bestIndex := -1, -1
+	for path, a := range m.treeActivity {
+		at, ok := rowOf[path]
+		if !ok {
+			continue
+		}
+		for _, t := range a.Touches {
+			if t.EventIndex <= upto && t.EventIndex > bestIndex {
+				best, bestIndex = at, t.EventIndex
+			}
+		}
+	}
+	return best
+}
+
+// scrollToShow puts a row a third of the way down the pane, so what is coming
+// next is visible rather than the row sitting on the bottom edge.
+func scrollToShow(at, total, visible int) int {
+	if total <= visible {
+		return 0
+	}
+	return clampInt(at-visible/3, 0, total-visible)
+}
+
+// treeVisibleRows is how many rows of tree a pane of this height shows. It has
+// to agree with the renderer, or following would scroll to the wrong place.
+func treeVisibleRows(height int) int {
+	return max(1, height-5)
 }
 
 // treeUpto is the event the tree is drawn as of: where the replay has reached,
@@ -457,6 +530,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		}
 		m.replayTyped = 0
 		m.replayStepAt = time.Now()
+		m.treeFollow = true
 		return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen))
 	}
 
@@ -474,6 +548,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down", "j":
+		m.treeFollow = false
 		if m.treeCursor < len(rows)-1 {
 			m.treeCursor++
 		}
@@ -481,6 +556,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "k":
+		m.treeFollow = false
 		if m.treeCursor > 0 {
 			m.treeCursor--
 		}
@@ -540,20 +616,24 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, m.replayAdvanceCmd()
 
 	case "g", "home":
+		m.treeFollow = false
 		m.treeCursor, m.treeScroll = 0, 0
 		return m, nil
 
 	case "G", "end":
+		m.treeFollow = false
 		m.treeCursor = max(0, len(rows)-1)
 		m.treeFollowCursor(len(rows))
 		return m, nil
 
 	case "shift+down", "pgdown":
+		m.treeFollow = false
 		m.treeCursor = clampInt(m.treeCursor+m.pageSize(), 0, max(0, len(rows)-1))
 		m.treeFollowCursor(len(rows))
 		return m, nil
 
 	case "shift+up", "pgup":
+		m.treeFollow = false
 		m.treeCursor = clampInt(m.treeCursor-m.pageSize(), 0, max(0, len(rows)-1))
 		m.treeFollowCursor(len(rows))
 		return m, nil
@@ -564,7 +644,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 
 // treeFollowCursor keeps the selected row on screen.
 func (m *Model) treeFollowCursor(total int) {
-	visible := max(1, m.height-5)
+	visible := treeVisibleRows(m.height)
 	if m.treeCursor < m.treeScroll {
 		m.treeScroll = m.treeCursor
 	}
