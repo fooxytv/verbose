@@ -1522,3 +1522,67 @@ func TestMouseScrollRoutesByPaneInSplit(t *testing.T) {
 		t.Error("the tree must not move when the pointer is over the code")
 	}
 }
+
+// treeFocusRow walks a map, whose order Go randomises, and one shell command
+// can mention several files — so several touches share an event index. Picking
+// whichever came last would return a different row on every frame and the tree
+// would jitter thirty times a second.
+func TestTreeFocusIsDeterministicAndPrefersChanges(t *testing.T) {
+	rows := []treeRow{
+		{node: &session.TreeNode{Name: "a.go", Path: "/r/a.go"}},
+		{node: &session.TreeNode{Name: "b.go", Path: "/r/b.go"}},
+		{node: &session.TreeNode{Name: "c.go", Path: "/r/c.go"}},
+	}
+	// All three touched by the same step: two reads and one edit.
+	m := Model{treeActivity: map[string]*session.FileActivity{
+		"/r/a.go": {Path: "/r/a.go", Touches: []session.FileTouch{
+			{EventIndex: 4, Kind: session.TouchRead}}},
+		"/r/b.go": {Path: "/r/b.go", Touches: []session.FileTouch{
+			{EventIndex: 4, Kind: session.TouchEdit}}},
+		"/r/c.go": {Path: "/r/c.go", Touches: []session.FileTouch{
+			{EventIndex: 4, Kind: session.TouchRead}}},
+	}}
+
+	// The edit wins, every time.
+	for i := 0; i < 200; i++ {
+		if got := m.treeFocusRow(rows, 10); got != 1 {
+			t.Fatalf("iteration %d: focus = %d, want 1 (the edited file)", i, got)
+		}
+	}
+
+	// With only reads at that step, the earlier row wins — and keeps winning.
+	m.treeActivity["/r/b.go"].Touches[0].Kind = session.TouchRead
+	first := m.treeFocusRow(rows, 10)
+	for i := 0; i < 200; i++ {
+		if got := m.treeFocusRow(rows, 10); got != first {
+			t.Fatalf("iteration %d: focus moved from %d to %d between identical calls",
+				i, first, got)
+		}
+	}
+	if first != 0 {
+		t.Errorf("focus = %d, want the earliest row when nothing outranks", first)
+	}
+}
+
+// A later step always outranks an earlier one, whatever the kinds.
+func TestTreeFocusPrefersTheMostRecentStep(t *testing.T) {
+	rows := []treeRow{
+		{node: &session.TreeNode{Name: "old.go", Path: "/r/old.go"}},
+		{node: &session.TreeNode{Name: "new.go", Path: "/r/new.go"}},
+	}
+	m := Model{treeActivity: map[string]*session.FileActivity{
+		"/r/old.go": {Touches: []session.FileTouch{{EventIndex: 2, Kind: session.TouchEdit}}},
+		"/r/new.go": {Touches: []session.FileTouch{{EventIndex: 9, Kind: session.TouchRead}}},
+	}}
+
+	if got := m.treeFocusRow(rows, 20); got != 1 {
+		t.Errorf("focus = %d, want the more recent touch even though it is only a read", got)
+	}
+	// Rewound before it, the older change is the most recent thing that happened.
+	if got := m.treeFocusRow(rows, 5); got != 0 {
+		t.Errorf("focus = %d at step 5, want the older change", got)
+	}
+	if got := m.treeFocusRow(rows, 1); got != -1 {
+		t.Errorf("focus = %d before anything happened, want -1", got)
+	}
+}

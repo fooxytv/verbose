@@ -244,8 +244,8 @@ Two different kinds of truth sit in that one view, and the header says so:
 - **The marks come from the transcript**, which is exact however old the session
   is.
 
-The tree follows the replay, and **scrolls itself to whatever is being
-changed** — a project tree is far longer than the pane showing it, so without
+The tree follows the replay, and **scrolls itself to whatever is being worked
+on** — a project tree is far longer than the pane showing it, so without
 that the file being written is usually below the fold and its flash is never
 seen. It stays on the most recent change rather than snapping back between
 steps, and ignores changes with no row in the tree, such as scratch files a
@@ -290,6 +290,17 @@ Build output and version control are skipped (`node_modules`, `.git`, `dist`,
 `target`, `.terraform` and the rest), unless the session changed something
 inside, in which case the directory is opened anyway. The scan is capped at
 4000 entries and 8 levels so a large repository cannot stall the view.
+
+Because half of what an agent does goes through the shell, the tree also credits
+files that only appear in a command — `sed -n '1,80p' main.go`,
+`grep -n x pkg/a.go`, `cat README.md`. Measured over one machine's transcripts,
+1515 of 2992 shell commands named a real file in the project and 202 files
+appeared *only* that way, so a tree built from tool calls alone sits still
+through most of a Bash-heavy session. Those mentions are resolved against the
+tree already read from disk, so a version number or a Go module path that
+happens to look like a path does not register, and they are marked inferred: a
+command naming a file is good evidence it was read and no evidence of anything
+more.
 
 One honest limitation: **deletions are inferred, not recorded.** Claude Code has
 no delete tool, so the only evidence is an `rm` inside a shell command. Simple

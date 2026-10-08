@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -232,5 +233,94 @@ func TestScanTreeDescendsIntoSkippedDirWhenTouched(t *testing.T) {
 	tree := ScanTree(root, map[string]*FileActivity{p: {Path: p}})
 	if len(tree.Children) != 1 || tree.Children[0].Name != "dist" {
 		t.Fatalf("dist should be included when touched, got %+v", tree.Children)
+	}
+}
+
+// Half of what an agent does to a project goes through the shell, which records
+// no path. Without recovering those mentions the tree sits still through most of
+// a Bash-heavy session.
+func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
+	sess := &Session{
+		Info: SessionInfo{CWD: "/repo"},
+		Events: []Event{
+			{Type: EventToolUse, ToolName: "Bash", ToolInput: map[string]interface{}{
+				"command": "sed -n '1,80p' src/main.go"}},
+			{Type: EventToolUse, ToolName: "Bash", ToolInput: map[string]interface{}{
+				"command": "grep -n handler src/a.go src/b.go"}},
+			// Words that look like paths but are not files here.
+			{Type: EventToolUse, ToolName: "Bash", ToolInput: map[string]interface{}{
+				"command": "go install example.com/tool@v1.2.3 && echo 0.16.2"}},
+			// A write already says more than a read; one touch per step.
+			{Type: EventToolUse, ToolName: "Bash", ToolInput: map[string]interface{}{
+				"command": "cat > src/main.go <<'EOF'\nx\nEOF"}},
+		},
+	}
+
+	real := map[string]bool{
+		"/repo/src/main.go": true,
+		"/repo/src/a.go":    true,
+		"/repo/src/b.go":    true,
+	}
+	activity := BuildFileActivity(sess)
+	AttachShellReads(activity, sess, func(p string) bool { return real[p] })
+
+	for _, p := range []string{"/repo/src/main.go", "/repo/src/a.go", "/repo/src/b.go"} {
+		if activity[p] == nil {
+			t.Errorf("%s was mentioned by a command but not recorded", p)
+		}
+	}
+	// Only files that really exist in the project: a version number and a Go
+	// module path are not files.
+	if len(activity) != 3 {
+		t.Errorf("recorded %d files, want 3: %v", len(activity), keysOf(activity))
+	}
+
+	// The read is marked inferred, because a mention is not a tool call.
+	main := activity["/repo/src/main.go"]
+	if main.Touches[0].Kind != TouchRead || !main.Touches[0].Inferred {
+		t.Errorf("first touch = %v inferred=%v, want an inferred read",
+			main.Touches[0].Kind, main.Touches[0].Inferred)
+	}
+	// The heredoc step wrote it; it must not also be recorded as a read.
+	writeStep := 3
+	n := 0
+	for _, tt := range main.Touches {
+		if tt.EventIndex == writeStep {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("step %d produced %d touches for main.go, want 1 (the write)", writeStep, n)
+	}
+	if kind, _, _, _ := main.StateAt(len(sess.Events)); kind != TouchWrite {
+		t.Errorf("main.go ended as %v, want written: a read must not mask the write", kind)
+	}
+}
+
+func keysOf(m map[string]*FileActivity) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestTreePathsCollectsFilesOnly(t *testing.T) {
+	root := &TreeNode{Name: "r", Path: "/r", IsDir: true, Children: []*TreeNode{
+		{Name: "a.go", Path: "/r/a.go"},
+		{Name: "sub", Path: "/r/sub", IsDir: true, Children: []*TreeNode{
+			{Name: "b.go", Path: "/r/sub/b.go"},
+		}},
+	}}
+	paths := TreePaths(root)
+	if len(paths) != 2 || !paths["/r/a.go"] || !paths["/r/sub/b.go"] {
+		t.Errorf("TreePaths = %v, want just the two files", paths)
+	}
+	if paths["/r"] || paths["/r/sub"] {
+		t.Error("directories are not files")
+	}
+	if got := TreePaths(nil); len(got) != 0 {
+		t.Errorf("TreePaths(nil) = %v, want empty", got)
 	}
 }

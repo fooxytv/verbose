@@ -410,3 +410,95 @@ func sortTree(n *TreeNode) {
 		sortTree(c)
 	}
 }
+
+// shellPathToken matches a bare word that could be a path with an extension.
+// Deliberately loose: whether it is really a file is decided by looking it up,
+// not by the shape of the word.
+var shellPathToken = regexp.MustCompile(`[A-Za-z0-9_./~-]+\.[A-Za-z0-9_]+`)
+
+// AttachShellReads credits a session with the files its shell commands touched.
+//
+// Half of what an agent does to a project happens through the shell, where no
+// tool records a path: `sed -n '1,80p' main.go`, `grep -n x pkg/a.go`,
+// `cat README.md`. Measured over one machine's transcripts, 1515 of 2992 shell
+// commands named a real file in the project and 202 files appeared ONLY that
+// way — so a tree built from tool calls alone sits still through most of a
+// Bash-heavy session.
+//
+// exists decides what counts, and is expected to be a lookup against a tree
+// already read from disk rather than a stat per candidate: a command mentions
+// plenty of words that look like paths — version numbers, flags, package names
+// — and only the ones that are really files in this project should register.
+// Everything added here is marked Inferred, because a mention is not a tool
+// call: a command naming a file is good evidence it was read, and no evidence
+// of anything more.
+func AttachShellReads(activity map[string]*FileActivity, sess *Session, exists func(string) bool) {
+	if activity == nil || sess == nil || exists == nil {
+		return
+	}
+
+	for i := range sess.Events {
+		e := sess.Events[i]
+		if e.ToolName != "Bash" && e.ToolName != "BashOutput" {
+			continue
+		}
+		cmd, ok := stringInput(e.ToolInput, "command")
+		if !ok {
+			continue
+		}
+
+		for _, token := range shellPathToken.FindAllString(cmd, -1) {
+			path := absolutePath(strings.Trim(token, `"'`), sess.Info.CWD)
+			if !exists(path) {
+				continue
+			}
+			a := activity[path]
+			if a == nil {
+				a = &FileActivity{Path: path}
+				activity[path] = a
+			}
+			// A write or a removal at this same step already says more than a
+			// read would; do not record both for one command.
+			if a.touchedAtIndex(i) {
+				continue
+			}
+			a.Touches = append(a.Touches, FileTouch{
+				EventIndex: i, Kind: TouchRead, Inferred: true,
+			})
+		}
+	}
+
+	for _, a := range activity {
+		sort.SliceStable(a.Touches, func(x, y int) bool {
+			return a.Touches[x].EventIndex < a.Touches[y].EventIndex
+		})
+	}
+}
+
+func (a *FileActivity) touchedAtIndex(i int) bool {
+	for _, t := range a.Touches {
+		if t.EventIndex == i {
+			return true
+		}
+	}
+	return false
+}
+
+// TreePaths is the set of files a tree contains, for resolving shell mentions
+// without touching the disk again.
+func TreePaths(root *TreeNode) map[string]bool {
+	paths := make(map[string]bool)
+	var walk func(n *TreeNode)
+	walk = func(n *TreeNode) {
+		if !n.IsDir {
+			paths[n.Path] = true
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	if root != nil {
+		walk(root)
+	}
+	return paths
+}

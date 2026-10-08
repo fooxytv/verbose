@@ -385,6 +385,14 @@ func (m *Model) loadTreeFor(sess *session.Session) {
 		root = sess.Info.ProjectDir
 	}
 	m.treeRoot = session.ScanTree(root, m.treeActivity)
+
+	// Half of what a session does to its project goes through the shell, which
+	// records no path. Resolve those mentions against the tree just read, so
+	// the tree reflects where the work was happening and not only where a tool
+	// call happened to name a file.
+	paths := session.TreePaths(m.treeRoot)
+	session.AttachShellReads(m.treeActivity, sess, func(p string) bool { return paths[p] })
+
 	if m.treeCollapsed == nil {
 		m.treeCollapsed = make(map[string]bool)
 	}
@@ -460,16 +468,34 @@ func (m Model) treeFocusRow(rows []treeRow, upto int) int {
 		}
 	}
 
-	best, bestIndex := -1, -1
+	// Ties have to be broken deterministically. One shell command can mention
+	// several files, so several touches share an event index — and this walks a
+	// map, whose order Go randomises. Picking "whichever came last" would
+	// return a different row on every frame and the tree would jitter thirty
+	// times a second. A change outranks a read, and then the earlier row wins.
+	best, bestIndex, bestChanged := -1, -1, false
 	for path, a := range m.treeActivity {
 		at, ok := rowOf[path]
 		if !ok {
 			continue
 		}
 		for _, t := range a.Touches {
-			if t.EventIndex <= upto && t.EventIndex > bestIndex {
-				best, bestIndex = at, t.EventIndex
+			if t.EventIndex > upto {
+				break
 			}
+			changed := t.Kind.Changed()
+			switch {
+			case t.EventIndex > bestIndex:
+			case t.EventIndex < bestIndex:
+				continue
+			case changed != bestChanged:
+				if !changed {
+					continue
+				}
+			case at >= best:
+				continue
+			}
+			best, bestIndex, bestChanged = at, t.EventIndex, changed
 		}
 	}
 	return best
