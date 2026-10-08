@@ -223,9 +223,11 @@ yet built.
 
 `T` works from the sessions list, the timeline and from inside a replay. It
 shows the project as a tree, marked with what the open session did to each
-file: **new** files in green, **changed** in yellow with their churn, **removed**
-in red, everything the session never touched dimmed. `Tab` narrows it to just
-the files that changed. `Enter` on a file jumps the replay to the change.
+file: **new** files in green, **changed** in orange with their churn, **removed**
+in red, everything the session never touched dimmed. A change flashes as the
+replay reaches it and then keeps its colour, so the tree accumulates a record of
+the session rather than settling back to neutral. `Tab` narrows it to just the
+files that changed. `Enter` on a file jumps the replay to the change.
 
 Two different kinds of truth sit in that one view, and the header says so:
 
@@ -236,9 +238,18 @@ Two different kinds of truth sit in that one view, and the header says so:
 - **The marks come from the transcript**, which is exact however old the session
   is.
 
-The tree follows the replay. `Space` plays, and files light up as they are
-written, settling over about a second — so the project assembles itself in front
-of you. Step back in the replay and later work disappears again.
+The tree follows the replay, and **scrolls itself to whatever is being
+changed** — a project tree is far longer than the pane showing it, so without
+that the file being written is usually below the fold and its flash is never
+seen. It stays on the most recent change rather than snapping back between
+steps, and ignores changes with no row in the tree, such as scratch files a
+session writes outside its own project.
+
+`Space` plays, and files light up as they are written, settling over about a
+second into their colour — so the project assembles itself in front of you.
+Step back in the replay and later work disappears again. Moving the cursor
+yourself takes over from the follow; `Space` hands it back. The sidebar has no
+cursor of its own, so it always follows.
 
 ### Side by side
 
