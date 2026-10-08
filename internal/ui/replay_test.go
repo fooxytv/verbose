@@ -1807,3 +1807,78 @@ func TestDiffNotesWrapRatherThanTruncate(t *testing.T) {
 		t.Errorf("a long note in a 50-column pane produced %d rows; it should wrap", notes)
 	}
 }
+
+// Scrolling the tree stops it following, which is right while paused. Pressing
+// play is an explicit "watch this again", so the follow has to come back —
+// otherwise the sidebar sits still for the rest of the session with no sign
+// why. The full-screen tree already did this on space; the split's space goes
+// to the replay handler, which did not.
+func TestPlayingAgainResumesTheTreeFollow(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 24
+
+	// Scrolling the tree while the replay runs leaves the replay running: the
+	// two panes are independent, and stopping the code because the tree was
+	// touched would be a surprise.
+	playing := m
+	playing.replayPlaying = true
+	res, _ := playing.handleReplayKey(runeKey("]"), "]")
+	playing = res.(Model)
+	if !playing.replayPlaying {
+		t.Error("scrolling the tree should not stop the replay")
+	}
+	if playing.treeFollowing() {
+		t.Error("scrolling the tree should stop the follow")
+	}
+
+	// The reported flow: paused, scroll the tree, then start it again.
+	m.replayPlaying = false
+	res, _ = m.handleReplayKey(runeKey("]"), "]")
+	m = res.(Model)
+	if m.treeFollowing() {
+		t.Fatal("scrolling the tree should stop the follow")
+	}
+
+	// Press play: the follow comes back.
+	res, _ = m.handleReplayKey(tea.KeyMsg{Type: tea.KeySpace}, " ")
+	m = res.(Model)
+	if !m.replayPlaying {
+		t.Fatal("space should start playback")
+	}
+	if !m.treeFollowing() {
+		t.Error("playing again should resume the tree follow")
+	}
+
+	// Pausing does not turn it off again: the tree is not moving anyway.
+	res, _ = m.handleReplayKey(tea.KeyMsg{Type: tea.KeySpace}, " ")
+	m = res.(Model)
+	if m.replayPlaying {
+		t.Fatal("space should pause")
+	}
+	if !m.treeFollow {
+		t.Error("pausing should not revoke the follow")
+	}
+}
+
+// The same from the mouse: scrolling the sidebar with the wheel stops the
+// follow, and play brings it back.
+func TestWheelOnSidebarStopsFollowAndPlayResumes(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 24
+
+	res, _ := m.handleMouse(wheel(false, sidebarWidth(m.width)/2))
+	m = res.(Model)
+	if m.treeFollow {
+		t.Fatal("the wheel over the tree should stop the follow")
+	}
+
+	res, _ = m.handleReplayKey(tea.KeyMsg{Type: tea.KeySpace}, " ")
+	m = res.(Model)
+	if !m.treeFollowing() {
+		t.Error("playing should resume the follow after a wheel scroll too")
+	}
+}

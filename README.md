@@ -307,8 +307,11 @@ bindings are still accepted as aliases if you have remapped your system
 shortcuts.
 
 Driving the tree by hand stops it following the replay — being pulled away
-mid-read is worse than having to ask for the follow back — and `Ctrl`+`f` hands
-it back. The footer shows which of the two is in charge.
+mid-read is worse than having to ask for the follow back. **Pressing play hands
+it back**, since that is an explicit "watch this again"; so does `Ctrl`+`f`, and
+the footer shows which of the two is in charge. Scrolling the tree while the
+replay is running does not stop the replay: the two panes are independent, and
+only `Ctrl`+`f` re-arms the follow in that case.
 
 It needs **100 columns**. Below that the code pane has too little room to read
 code in, so the split is refused and says how many columns it wants rather than

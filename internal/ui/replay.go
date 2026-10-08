@@ -873,7 +873,15 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			m.replayScroll = 0
 		}
 		m.replayTyped = 0
-		return m, m.replayAdvanceCmd()
+		m.replayStepAt = time.Now()
+
+		// Pressing play is an explicit "watch this again", so the tree follows
+		// once more. Scrolling it by hand stops the follow, which is right
+		// while paused — but leaving it off through a deliberate play meant the
+		// sidebar sat still for the rest of the session with no sign why.
+		m.treeFollow = true
+
+		return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen))
 	}
 
 	switch key {
