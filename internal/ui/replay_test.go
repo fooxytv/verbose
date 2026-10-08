@@ -1709,3 +1709,101 @@ func TestDiffIsBoundedByReplayPosition(t *testing.T) {
 		t.Errorf("at the end the diff shows %d changes, want 1", len(late.changes))
 	}
 }
+
+// A file can be changed with nothing to diff. The panel has to say which
+// reason applies, because "no diff recorded" on a file the tree plainly marks
+// as changed reads as a bug.
+func TestDiffExplainsChangesThatHaveNoDiff(t *testing.T) {
+	root := t.TempDir()
+	del := filepath.Join(root, "gone.txt")
+	out := filepath.Join(root, "outside.txt")
+	for _, p := range []string{del, out} {
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sess := &session.Session{
+		Info: session.SessionInfo{CWD: root},
+		Events: []session.Event{
+			{Type: session.EventToolUse, ToolName: "Bash",
+				ToolInput: map[string]interface{}{"command": "rm " + del}},
+			{Type: session.EventUserFileEdit, FilePath: out, Text: "a snippet of the edit"},
+		},
+	}
+
+	m := Model{width: 160, height: 24, version: "0.0.0"}
+	m.replaySteps = session.BuildReplay(sess)
+	m.loadTreeFor(sess)
+	m.replayIndex = max(0, len(m.replaySteps)-1)
+
+	// A deletion: inferred from a command, with no content anywhere.
+	m.diffPath = del
+	changes := m.diffChanges()
+	if len(changes) != 1 || changes[0].Kind != session.TouchDelete {
+		t.Fatalf("deletion changes = %+v, want one delete", changes)
+	}
+	body := stripAnsi(renderFileDiff(m.diffViewState(100, 20)))
+	if !strings.Contains(body, "Removed by a shell command") {
+		t.Errorf("deletion panel does not explain itself:\n%s", body)
+	}
+	if strings.Contains(body, "No diff recorded for this file") {
+		t.Error("a deletion should be explained, not reported as nothing")
+	}
+
+	// A change the user made outside Claude: a snippet, not a diff. This was
+	// skipped entirely, so the tree marked the file changed and the panel was
+	// empty.
+	m.diffPath = out
+	changes = m.diffChanges()
+	if len(changes) != 1 || !changes[0].Outside {
+		t.Fatalf("outside changes = %+v, want one marked Outside", changes)
+	}
+	body = stripAnsi(renderFileDiff(m.diffViewState(100, 20)))
+	if !strings.Contains(body, "outside Claude") {
+		t.Errorf("outside-edit panel does not explain itself:\n%s", body)
+	}
+	if !strings.Contains(body, "a snippet of the edit") {
+		t.Errorf("the snippet the transcript does keep should be shown:\n%s", body)
+	}
+}
+
+// Every file the tree marks as changed must have something to show. A changed
+// file with an empty panel is the bug this guards.
+func TestEveryChangedFileHasSomethingToShow(t *testing.T) {
+	m := treeModel(t)
+	m.replayIndex = max(0, len(m.replaySteps)-1)
+	paths := session.TreePaths(m.treeRoot)
+
+	for path, a := range m.treeActivity {
+		kind, _, _, touched := a.StateAt(m.treeUpto())
+		if !touched || !kind.Changed() || !paths[path] {
+			continue
+		}
+		v := m
+		v.diffPath = path
+		if rows := diffRows(v.diffChanges(), 100); len(rows) == 0 {
+			t.Errorf("%s is marked %v in the tree but its diff panel is empty",
+				session.ShortPath(path, m.selectedSession.Info.CWD), kind)
+		}
+	}
+}
+
+// Prose has to wrap: a note truncated at the pane edge stops mid-sentence.
+func TestDiffNotesWrapRatherThanTruncate(t *testing.T) {
+	changes := []session.FileChange{{Kind: session.TouchDelete, Inferred: true}}
+	narrow := diffRows(changes, 50)
+
+	notes := 0
+	for _, r := range narrow {
+		if r.Kind == session.DiffNote {
+			notes++
+			if n := visibleLen(r.Header); n > 50 {
+				t.Errorf("note row is %d columns, wider than the 50 given: %q", n, r.Header)
+			}
+		}
+	}
+	if notes < 2 {
+		t.Errorf("a long note in a 50-column pane produced %d rows; it should wrap", notes)
+	}
+}

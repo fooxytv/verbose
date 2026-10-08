@@ -29,6 +29,10 @@ type FileChange struct {
 
 	// Inferred marks a change deduced from a shell command.
 	Inferred bool
+
+	// Outside marks a change the user made themselves, outside Claude. The
+	// transcript keeps only a snippet of it.
+	Outside bool
 }
 
 // HasDiff reports whether this change has a real two-sided diff.
@@ -50,6 +54,19 @@ func FileChanges(sess *Session, path string, upto int) []FileChange {
 			break
 		}
 		e := sess.Events[i]
+
+		// A change the user made themselves. The transcript keeps a snippet
+		// rather than a diff, and it was being skipped entirely: a file edited
+		// outside Claude showed as changed in the tree and empty in the panel.
+		if e.Type == EventUserFileEdit {
+			if e.FilePath != "" && absolutePath(e.FilePath, sess.Info.CWD) == path {
+				out = append(out, FileChange{
+					EventIndex: i, Kind: TouchEdit, Content: e.Text, Outside: true,
+				})
+			}
+			continue
+		}
+
 		if e.Type != EventToolUse && e.Type != EventToolResult {
 			continue
 		}
@@ -78,6 +95,17 @@ func FileChanges(sess *Session, path string, upto int) []FileChange {
 			if !ok {
 				continue
 			}
+			// A removal, which records nothing at all: there is no content to
+			// show and never was. Reported so the panel can say that instead
+			// of looking as though the file was never touched.
+			for _, removed := range shellRemovals(cmd) {
+				if absolutePath(removed, sess.Info.CWD) == path {
+					out = append(out, FileChange{
+						EventIndex: i, Kind: TouchDelete, Inferred: true,
+					})
+				}
+			}
+
 			target, body := shellHeredoc(cmd)
 			if body == "" || absolutePath(target, sess.Info.CWD) != path {
 				continue
@@ -104,6 +132,10 @@ const (
 	DiffAdded
 	// DiffHeader is a hunk boundary.
 	DiffHeader
+	// DiffNote is prose explaining why there is nothing to show — a deletion
+	// records no content, and a change made outside Claude records a snippet
+	// at most.
+	DiffNote
 )
 
 // DiffRow is one row of a two-column diff. Either side may be absent.

@@ -44,16 +44,21 @@ type fileDiffView struct {
 
 // diffRows turns a file's changes into rows to draw, in order, with a heading
 // before each change so several edits to one file stay distinguishable.
-func diffRows(changes []session.FileChange) []session.DiffRow {
+func diffRows(changes []session.FileChange, width int) []session.DiffRow {
 	var rows []session.DiffRow
 	for i, c := range changes {
-		label := fmt.Sprintf("change %d of %d · %s", i+1, len(changes), c.Kind)
-		if c.Inferred {
-			label += " through the shell, no diff recorded"
-		} else if !c.HasDiff() {
-			label += ", no previous version to compare"
+		rows = append(rows, session.DiffRow{
+			Kind:   session.DiffHeader,
+			Header: fmt.Sprintf("change %d of %d · %s", i+1, len(changes), c.Kind),
+		})
+		// A note is prose and has to wrap: truncated at the pane edge it stops
+		// mid-sentence, which is worse than not explaining at all.
+		for _, line := range wrapProse(changeNote(c), max(10, width-4), "") {
+			if line == "" {
+				continue
+			}
+			rows = append(rows, session.DiffRow{Kind: session.DiffNote, Header: line})
 		}
-		rows = append(rows, session.DiffRow{Kind: session.DiffHeader, Header: label})
 
 		if c.HasDiff() {
 			rows = append(rows, session.SideBySide(c.Hunks)...)
@@ -62,6 +67,34 @@ func diffRows(changes []session.FileChange) []session.DiffRow {
 		rows = append(rows, session.ContentRows(c.Content)...)
 	}
 	return rows
+}
+
+// changeNote explains a change that cannot be shown as a diff, so the panel
+// says why rather than appearing to have found nothing.
+func changeNote(c session.FileChange) string {
+	switch {
+	case c.Kind == session.TouchDelete:
+		return "Removed by a shell command. Claude Code has no delete tool, so " +
+			"this is inferred from the command line — and the contents were " +
+			"never recorded, so there is nothing to show."
+	case c.Outside:
+		if strings.TrimSpace(c.Content) == "" {
+			return "You changed this file outside Claude. The transcript notes " +
+				"that it happened but keeps none of the content."
+		}
+		return "You changed this file outside Claude. The transcript keeps only " +
+			"the snippet below, not a diff."
+	case c.Inferred:
+		return "Written through the shell, so no diff was recorded. The whole " +
+			"body it was given follows."
+	case !c.HasDiff() && c.Content != "":
+		return "A new file: there is no previous version to compare against, " +
+			"so all of it is an addition."
+	case !c.HasDiff():
+		return "Claude Code recorded neither a diff nor any content for this " +
+			"change."
+	}
+	return ""
 }
 
 // renderFileDiff draws the panel.
@@ -141,6 +174,9 @@ func diffSummary(v fileDiffView) string {
 func renderDiffRow(v fileDiffView, row session.DiffRow) string {
 	if row.Kind == session.DiffHeader {
 		return "  " + systemStyle.Render(truncateRunes(row.Header, max(4, v.width-4)))
+	}
+	if row.Kind == session.DiffNote {
+		return "  " + mutedStyle.Render(truncateRunes(row.Header, max(4, v.width-4)))
 	}
 	if v.unified {
 		return renderUnifiedRow(v, row)

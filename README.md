@@ -275,9 +275,16 @@ Like the tree's colours, the diff is bounded by where the replay has reached —
 it shows what had happened by that point, not what is still to come. For a file
 whose changes come later it says so and tells you how many.
 
-A **new** file has no previous version to compare against, so it is shown as
-all-additions rather than a two-sided diff. The same goes for a file written
-through the shell, where no diff is recorded at all.
+Not every change can be shown as a diff, and the panel says which reason
+applies rather than appearing to have found nothing:
+
+| Change | What the panel shows |
+|---|---|
+| An edit to an existing file | The recorded diff, side by side |
+| A **new** file | All of it as additions — there is no previous version |
+| Written through the shell | The whole body it was given, with no diff recorded |
+| **Removed** | An explanation only. Claude Code has no delete tool, so the removal is inferred from the command line and the contents were never kept |
+| Changed by **you**, outside Claude | The snippet the transcript keeps, which is all it keeps |
 
 ### Side by side
 

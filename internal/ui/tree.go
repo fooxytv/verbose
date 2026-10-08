@@ -953,7 +953,7 @@ func (m Model) diffViewState(width, height int) fileDiffView {
 		path:    m.diffPath,
 		cwd:     cwd,
 		changes: changes,
-		rows:    diffRows(changes),
+		rows:    diffRows(changes, width),
 		scroll:  m.diffScroll,
 		unified: width < diffSideBySideMin,
 		later:   len(session.FileChanges(m.selectedSession, m.diffPath, -1)) - len(changes),
@@ -1011,7 +1011,7 @@ func (m Model) handleDiffKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "G", "end":
-		m.diffScroll = len(diffRows(m.diffChanges()))
+		m.diffScroll = len(diffRows(m.diffChanges(), m.width))
 		return m, nil
 
 	// Browsing: move the tree selection and the diff follows, so several files
