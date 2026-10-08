@@ -136,8 +136,8 @@ In the replay view:
 | `f` | Follow a running session (on by default) |
 | `0` | Back to the first step |
 | `t` | Jump to this point in the timeline |
-| `Ctrl`+`↑`/`↓` | Move the tree selection (with the sidebar open) |
-| `Ctrl`+`←`/`→` | Close / open a directory in the sidebar |
+| `]` / `[` | Move the tree selection (with the sidebar open) |
+| `}` / `{` | Open / close a directory in the sidebar |
 | `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
 
@@ -263,11 +263,20 @@ there is no focus to switch and no key that means one thing on the left and
 another on the right — navigating the tree is what the full-screen view is for.
 
 In the split the plain arrows stay with the replay, so nothing changes meaning
-when the sidebar opens. **`Ctrl`+`↑`/`↓` moves the tree selection**, and
-`Ctrl`+`←`/`→` closes and opens directories. Driving the tree by hand stops it
-following the replay — being yanked away mid-read is worse than having to ask
-for the follow back — and `Ctrl`+`f` hands it back. The footer shows which of
-the two is in charge.
+when the sidebar opens. The tree gets its own keys: **`]` and `[` move the
+selection**, `}` and `{` open and close directories.
+
+They are bare characters on purpose. `Ctrl` with the arrows is unusable on
+macOS, where the system takes all four for Mission Control, Application Windows
+and moving between Spaces, so the terminal never sees them; `Shift` with the
+arrows is already page-scroll here and some terminals keep it for text
+selection. A plain character has no modifier to be intercepted. The `Ctrl`
+bindings are still accepted as aliases if you have remapped your system
+shortcuts.
+
+Driving the tree by hand stops it following the replay — being pulled away
+mid-read is worse than having to ask for the follow back — and `Ctrl`+`f` hands
+it back. The footer shows which of the two is in charge.
 
 It needs **100 columns**. Below that the code pane has too little room to read
 code in, so the split is refused and says how many columns it wants rather than

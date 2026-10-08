@@ -413,7 +413,8 @@ func (m Model) View() string {
 				followLabel = "following ●"
 			}
 			helpKeys = append(helpKeys,
-				helpKey{"ctrl+↑/↓", "tree"},
+				helpKey{"[/]", "tree"},
+				helpKey{"{/}", "fold"},
 				helpKey{"ctrl+f", followLabel},
 			)
 		}

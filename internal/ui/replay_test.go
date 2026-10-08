@@ -1258,7 +1258,7 @@ func TestTreeFlashSettlesIntoAPersistentMark(t *testing.T) {
 
 // In the split every plain arrow belongs to the replay, which left the tree
 // unreachable while it was running. ctrl with an arrow drives the tree instead.
-func TestSidebarCtrlArrowsDriveTheTree(t *testing.T) {
+func TestSidebarKeysDriveTheTree(t *testing.T) {
 	m := treeModel(t)
 	m.mode = viewReplay
 	m.treeSplit = true
@@ -1267,10 +1267,12 @@ func TestSidebarCtrlArrowsDriveTheTree(t *testing.T) {
 
 	before := m.replayIndex
 
-	res, _ := m.handleReplayKey(namedKey(tea.KeyCtrlDown), "ctrl+down")
+	// "]" and "[" are the bindings that work everywhere: ctrl with the arrows
+	// is swallowed by macOS before the terminal sees it.
+	res, _ := m.handleReplayKey(runeKey("]"), "]")
 	m = res.(Model)
 	if m.treeCursor != 1 {
-		t.Errorf("tree cursor = %d after ctrl+down, want 1", m.treeCursor)
+		t.Errorf("tree cursor = %d after \"]\", want 1", m.treeCursor)
 	}
 	if m.replayIndex != before {
 		t.Error("ctrl+down must not move the replay")
@@ -1279,11 +1281,21 @@ func TestSidebarCtrlArrowsDriveTheTree(t *testing.T) {
 		t.Error("driving the tree by hand should stop the follow")
 	}
 
-	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlUp), "ctrl+up")
+	res, _ = m.handleReplayKey(runeKey("["), "[")
 	m = res.(Model)
 	if m.treeCursor != 0 {
-		t.Errorf("tree cursor = %d after ctrl+up, want 0", m.treeCursor)
+		t.Errorf("tree cursor = %d after \"[\", want 0", m.treeCursor)
 	}
+
+	// The ctrl bindings remain as aliases for anyone who has remapped their
+	// system shortcuts.
+	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlDown), "ctrl+down")
+	m = res.(Model)
+	if m.treeCursor != 1 {
+		t.Errorf("tree cursor = %d after ctrl+down, want 1", m.treeCursor)
+	}
+	res, _ = m.handleReplayKey(runeKey("["), "[")
+	m = res.(Model)
 
 	// ctrl+f gives the follow back.
 	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlF), "ctrl+f")
@@ -1304,7 +1316,7 @@ func TestSidebarCtrlArrowsDriveTheTree(t *testing.T) {
 }
 
 // ctrl+left and ctrl+right open and close directories in the sidebar.
-func TestSidebarCtrlArrowsCollapseDirectories(t *testing.T) {
+func TestSidebarKeysCollapseDirectories(t *testing.T) {
 	m := treeModel(t)
 	m.mode = viewReplay
 	m.treeSplit = true
@@ -1315,19 +1327,19 @@ func TestSidebarCtrlArrowsCollapseDirectories(t *testing.T) {
 		t.Skip("root is not a directory")
 	}
 
-	res, _ := m.handleReplayKey(namedKey(tea.KeyCtrlLeft), "ctrl+left")
+	res, _ := m.handleReplayKey(runeKey("{"), "{")
 	m = res.(Model)
 	if !m.treeCollapsed[root.Path] {
-		t.Fatal("ctrl+left should close the directory under the cursor")
+		t.Fatal("\"{\" should close the directory under the cursor")
 	}
 	if n := len(m.treeRows()); n != 1 {
 		t.Errorf("closed root leaves %d rows, want 1", n)
 	}
 
-	res, _ = m.handleReplayKey(namedKey(tea.KeyCtrlRight), "ctrl+right")
+	res, _ = m.handleReplayKey(runeKey("}"), "}")
 	m = res.(Model)
 	if m.treeCollapsed[root.Path] {
-		t.Error("ctrl+right should open it again")
+		t.Error("\"}\" should open it again")
 	}
 }
 
@@ -1340,7 +1352,7 @@ func TestSidebarScrollsCursorIntoView(t *testing.T) {
 	m.width, m.height = 160, 14
 
 	for i := 0; i < 40; i++ {
-		res, _ := m.handleReplayKey(namedKey(tea.KeyCtrlDown), "ctrl+down")
+		res, _ := m.handleReplayKey(runeKey("]"), "]")
 		m = res.(Model)
 
 		v := m.treeViewState(sidebarWidth(m.width), m.height-1)

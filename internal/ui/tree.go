@@ -792,8 +792,16 @@ func renderSplit(m Model) string {
 // Navigating the sidebar.
 //
 // In the split every arrow key belongs to the replay, which left the tree
-// unreachable while it was running. ctrl with the arrows moves the tree
-// instead: it collides with nothing, and it reads as "the other pane".
+// unreachable while it was running. The tree gets its own keys instead.
+//
+// They are plain characters on purpose. ctrl with the arrows was the obvious
+// choice and is unusable on macOS, where the system takes all four for Mission
+// Control, Application Windows and moving between Spaces — the terminal never
+// sees them. shift with the arrows is already page-scroll here and some
+// terminals keep it for text selection. A bare character has no modifier to be
+// intercepted, works the same in every terminal, and needs no per-platform
+// caveat. The ctrl bindings are kept as aliases for anyone who has remapped
+// their system shortcuts.
 
 // treeMove moves the tree cursor by n rows within a pane of the given height,
 // and hands the follow back to the reader.
@@ -842,13 +850,13 @@ func (m *Model) treeToggleAt(open bool) {
 // the replay owns the plain ones. It reports whether it consumed the key.
 func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
 	switch key {
-	case "ctrl+down":
+	case "]", "ctrl+down":
 		m.treeMove(1, paneHeight)
-	case "ctrl+up":
+	case "[", "ctrl+up":
 		m.treeMove(-1, paneHeight)
-	case "ctrl+right":
+	case "}", "ctrl+right":
 		m.treeToggleAt(true)
-	case "ctrl+left":
+	case "{", "ctrl+left":
 		m.treeToggleAt(false)
 	case "ctrl+f":
 		// Hand the follow back to the replay.
