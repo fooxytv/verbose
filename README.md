@@ -136,12 +136,15 @@ In the replay view:
 | `f` | Follow a running session (on by default) |
 | `0` | Back to the first step |
 | `t` | Jump to this point in the timeline |
+| `↑`/`↓`, `j`/`k` | Move the tree selection (full-screen tree) |
 | `]` / `[` | Move the tree selection (with the sidebar open) |
 | `}` / `{` | Open / close a directory in the sidebar |
 | `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
 
-Mouse scroll is also supported in all views.
+Mouse scroll works in every view. With the tree beside the replay, the pointer
+decides which pane moves: over the tree it moves the selection, over the code it
+scrolls the step.
 
 The footer's right-hand side shows how long ago the open session was written,
 the time now, and the version — so a live session visibly ticking apart from

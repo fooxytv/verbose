@@ -1082,6 +1082,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if m.projectScroll > 0 {
 				m.projectScroll--
 			}
+		case viewTree:
+			m.treeMove(-1, m.height)
+		case viewReplay:
+			m.scrollReplayPane(msg.X, -1)
 		}
 
 	case tea.MouseButtonWheelDown:
@@ -1100,9 +1104,28 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.eventScroll++
 		case viewProject:
 			m.projectScroll++
+		case viewTree:
+			m.treeMove(1, m.height)
+		case viewReplay:
+			m.scrollReplayPane(msg.X, 1)
 		}
 	}
 	return m, nil
+}
+
+// scrollReplayPane scrolls whichever pane the pointer is over.
+//
+// With the tree beside the replay there are two things a wheel could mean, and
+// the pointer says which: the mouse already reports its column, so the pane
+// under it is the one that moves. Without the sidebar there is only the replay.
+func (m *Model) scrollReplayPane(x, delta int) {
+	if m.treeSplit && x < sidebarWidth(m.width) {
+		m.treeMove(delta, m.height-1)
+		return
+	}
+	// Scrolling is taking a look, which pauses, exactly as the arrow keys do.
+	m.replayTakeOver()
+	m.replayScroll = max(0, m.replayScroll+delta)
 }
 
 func (m Model) pageSize() int {

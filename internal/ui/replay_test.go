@@ -1447,3 +1447,78 @@ func TestTimelineSearchStillFilters(t *testing.T) {
 		t.Errorf("search matched %d of %d events; it should have filtered them out", got, all)
 	}
 }
+
+// wheel builds the message bubbletea delivers for a scroll at a column.
+func wheel(up bool, x int) tea.MouseMsg {
+	btn := tea.MouseButtonWheelDown
+	if up {
+		btn = tea.MouseButtonWheelUp
+	}
+	return tea.MouseMsg{Button: btn, Action: tea.MouseActionPress, X: x}
+}
+
+// The tree and the replay were the only views the wheel did nothing in, while
+// the README claimed every view supported it.
+func TestMouseScrollsTreeAndReplay(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewTree
+	m.width, m.height = 120, 24
+
+	res, _ := m.handleMouse(wheel(false, 0))
+	m = res.(Model)
+	if m.treeCursor != 1 {
+		t.Errorf("tree cursor = %d after a wheel down, want 1", m.treeCursor)
+	}
+	res, _ = m.handleMouse(wheel(true, 0))
+	m = res.(Model)
+	if m.treeCursor != 0 {
+		t.Errorf("tree cursor = %d after a wheel up, want 0", m.treeCursor)
+	}
+
+	// In the replay the wheel scrolls the step, and pauses, as the arrows do.
+	r := treeModel(t)
+	r.mode = viewReplay
+	r.width, r.height = 120, 24
+	r.replayPlaying = true
+	res, _ = r.handleMouse(wheel(false, 60))
+	r = res.(Model)
+	if r.replayScroll != 1 {
+		t.Errorf("replayScroll = %d after a wheel down, want 1", r.replayScroll)
+	}
+	if r.replayPlaying {
+		t.Error("scrolling the replay should pause it, like the arrow keys")
+	}
+}
+
+// With the sidebar open the pointer decides which pane moves.
+func TestMouseScrollRoutesByPaneInSplit(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.treeSplit = true
+	m.width, m.height = 160, 24
+
+	side := sidebarWidth(m.width)
+	if side == 0 {
+		t.Fatal("160 columns should split")
+	}
+
+	// Over the tree.
+	res, _ := m.handleMouse(wheel(false, side/2))
+	over := res.(Model)
+	if over.treeCursor != 1 {
+		t.Errorf("tree cursor = %d with the pointer over the tree, want 1", over.treeCursor)
+	}
+	if over.replayScroll != 0 {
+		t.Error("the replay must not scroll when the pointer is over the tree")
+	}
+
+	// Over the code.
+	res, _ = m.handleMouse(wheel(false, side+20))
+	overCode := res.(Model)
+	if overCode.replayScroll != 1 {
+		t.Errorf("replayScroll = %d with the pointer over the code, want 1", overCode.replayScroll)
+	}
+	if overCode.treeCursor != 0 {
+		t.Error("the tree must not move when the pointer is over the code")
+	}
+}
