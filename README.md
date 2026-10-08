@@ -240,6 +240,19 @@ The tree follows the replay. `Space` plays, and files light up as they are
 written, settling over about a second — so the project assembles itself in front
 of you. Step back in the replay and later work disappears again.
 
+### Side by side
+
+`T` inside a replay puts the tree **beside** the code rather than instead of it:
+the tree on the left, the code streaming on the right, the tree lighting up as
+each file is written. All keys stay with the replay and the tree follows, so
+there is no focus to switch and no key that means one thing on the left and
+another on the right — navigating the tree is what the full-screen view is for.
+
+It needs **100 columns**. Below that the code pane has too little room to read
+code in, so the split is refused and says how many columns it wants rather than
+showing two unusable halves. The tree takes a third of the width, up to 40
+columns.
+
 Build output and version control are skipped (`node_modules`, `.git`, `dist`,
 `target`, `.terraform` and the rest), unless the session changed something
 inside, in which case the directory is opened anyway. The scan is capped at

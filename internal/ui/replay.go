@@ -987,10 +987,23 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		return m, tea.Batch(m.replayAdvanceCmd(), clearStatusAfter())
 
 	case "T":
-		// The project tree, at the same point in the session. Playback carries
-		// on if it was running, so the tree animates.
-		if m.selectedSession != nil {
-			m.openTree(m.selectedSession)
+		// Show the tree beside the replay, rather than instead of it. Keys stay
+		// with the replay and the tree follows, so there is no focus to switch.
+		if m.selectedSession == nil {
+			return m, nil
+		}
+		m.treeSplit = !m.treeSplit
+		if m.treeSplit {
+			if m.treeRoot == nil {
+				m.loadTreeFor(m.selectedSession)
+			}
+			m.treeGen++
+			if side := sidebarWidth(m.width); side == 0 {
+				m.treeSplit = false
+				m.statusMsg = fmt.Sprintf("Need %d columns for a split — this terminal has %d",
+					splitMinWidth, m.width)
+				return m, clearStatusAfter()
+			}
 			return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen))
 		}
 		return m, nil
@@ -1074,4 +1087,22 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// replayViewState assembles the replay renderer's inputs at a given size, so
+// the same view can fill the terminal or share it with the tree.
+func (m Model) replayViewState(width, height int) replayView {
+	return replayView{
+		sess:     m.selectedSession,
+		steps:    m.replaySteps,
+		idx:      m.replayIndex,
+		scroll:   m.replayScroll,
+		typed:    m.replayTyped,
+		playing:  m.replayPlaying,
+		waiting:  m.replayWaiting(),
+		codeOnly: m.replayCodeOnly,
+		delay:    m.replayDelay,
+		width:    width,
+		height:   height,
+	}
 }

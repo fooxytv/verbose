@@ -682,6 +682,21 @@ func TestViewNeverOverflowsTerminal(t *testing.T) {
 			m.replayPlaying = true
 			return m
 		}},
+		{"replay with tree sidebar", func(m Model) Model {
+			m.startReplay(sess)
+			m.loadTreeFor(sess)
+			m.treeSplit = true
+			m.replayPlaying = true
+			m.replayTyped = 30
+			return m
+		}},
+		{"sidebar, changed only", func(m Model) Model {
+			m.startReplay(sess)
+			m.loadTreeFor(sess)
+			m.treeSplit = true
+			m.treeChangedOnly = true
+			return m
+		}},
 		{"status message", func(m Model) Model {
 			m.mode = viewSessions
 			m.statusMsg = "Moved to Trash: a-fairly-long-transcript-file-name.jsonl"
@@ -948,7 +963,7 @@ func TestTreeCursorStaysInRangeAcrossFilter(t *testing.T) {
 	}
 	// Rendering with a stale cursor must not panic either.
 	m.treeCursor = 9999
-	if out := renderTree(m.treeViewState()); out == "" {
+	if out := renderTree(m.treeViewState(m.width, m.height)); out == "" {
 		t.Error("empty render with an out-of-range cursor")
 	}
 }
@@ -995,5 +1010,100 @@ func TestTreeFadeStageRamps(t *testing.T) {
 			t.Fatalf("fade went backwards at %v: %d after %d", d, s, last)
 		}
 		last = s
+	}
+}
+
+// The split exists to be read, so the code pane must keep enough width to read
+// code in. Below the floor it refuses and shows the replay full-width rather
+// than two unusable columns.
+func TestSidebarWidthRefusesNarrowTerminals(t *testing.T) {
+	for _, w := range []int{20, 60, 80, splitMinWidth - 1} {
+		if got := sidebarWidth(w); got != 0 {
+			t.Errorf("sidebarWidth(%d) = %d, want 0: too narrow to split", w, got)
+		}
+	}
+	for _, w := range []int{100, 120, 160, 300} {
+		got := sidebarWidth(w)
+		if got < treeSidebarMin || got > treeSidebarMax {
+			t.Errorf("sidebarWidth(%d) = %d, want between %d and %d",
+				w, got, treeSidebarMin, treeSidebarMax)
+		}
+		// Whatever is left has to be worth reading code in.
+		if main := usableWidth(w) - got - 3; main < 50 {
+			t.Errorf("width %d leaves only %d columns for code", w, main)
+		}
+	}
+}
+
+// Every row of a split frame has to be exactly the terminal's width minus one,
+// because a short row lets the right pane slide left on that line alone and a
+// long one pushes it off the screen.
+func TestSplitRowsAlignExactly(t *testing.T) {
+	m := treeModel(t)
+	m.treeSplit = true
+	m.replayPlaying = true
+
+	for _, w := range []int{100, 120, 160, 200} {
+		for _, typed := range []int{-1, 0, 25} {
+			v := m
+			v.width, v.height = w, 24
+			v.replayTyped = typed
+
+			side := sidebarWidth(w)
+			if side == 0 {
+				t.Fatalf("width %d should split", w)
+			}
+			want := side + 3 + (usableWidth(w) - side - 3)
+
+			rows := visibleLines(renderSplit(v))
+			for i, r := range rows {
+				if got := terminalColumns(r); got != want {
+					t.Fatalf("width %d typed %d: split row %d is %d columns, want exactly %d\n  %q",
+						w, typed, i, got, want, stripAnsi(r))
+				}
+			}
+		}
+	}
+}
+
+// Toggling the sidebar on a terminal too narrow for it must say so rather than
+// silently doing nothing.
+func TestSplitToggleExplainsWhenTooNarrow(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.width = 80
+
+	res, _ := m.handleReplayKey(runeKey("T"), "T")
+	m = res.(Model)
+	if m.treeSplit {
+		t.Error("the split should be refused at 80 columns")
+	}
+	if !strings.Contains(m.statusMsg, "columns") {
+		t.Errorf("statusMsg = %q, want it to explain the width needed", m.statusMsg)
+	}
+
+	// Wide enough: it turns on, and off again.
+	m.width = 160
+	m.statusMsg = ""
+	res, _ = m.handleReplayKey(runeKey("T"), "T")
+	m = res.(Model)
+	if !m.treeSplit {
+		t.Fatal("T should turn the sidebar on at 160 columns")
+	}
+	res, _ = m.handleReplayKey(runeKey("T"), "T")
+	m = res.(Model)
+	if m.treeSplit {
+		t.Error("T again should turn it off")
+	}
+}
+
+func TestPadPaneExactWidth(t *testing.T) {
+	cases := []string{"", "short", "a\tb", "\x1b[31mcoloured\x1b[0m",
+		strings.Repeat("long ", 40)}
+	for _, in := range cases {
+		out := padPane(in, 20)
+		if got := terminalColumns(out); got != 20 {
+			t.Errorf("padPane(%q) is %d columns, want 20", stripAnsi(in), got)
+		}
 	}
 }

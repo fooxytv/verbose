@@ -76,6 +76,8 @@ type Model struct {
 	treeCursor      int
 	treeScroll      int
 	treeChangedOnly bool
+	// treeSplit shows the tree beside the replay instead of instead of it.
+	treeSplit bool
 	// treeGen invalidates fade ticks left over from an earlier step.
 	treeGen int
 
@@ -371,19 +373,11 @@ func (m Model) View() string {
 
 	case viewReplay:
 		if m.selectedSession != nil {
-			content = renderReplay(replayView{
-				sess:     m.selectedSession,
-				steps:    m.replaySteps,
-				idx:      m.replayIndex,
-				scroll:   m.replayScroll,
-				typed:    m.replayTyped,
-				playing:  m.replayPlaying,
-				waiting:  m.replayWaiting(),
-				codeOnly: m.replayCodeOnly,
-				delay:    m.replayDelay,
-				width:    m.width,
-				height:   m.height,
-			})
+			if m.treeSplit {
+				content = renderSplit(m)
+			} else {
+				content = renderReplay(m.replayViewState(m.width, m.height))
+			}
 		}
 		playLabel := "play"
 		if m.replayPlaying {
@@ -401,10 +395,14 @@ func (m Model) View() string {
 		if m.replayCodeOnly {
 			codeLabel = "all steps"
 		}
+		treeLabel := "tree"
+		if m.treeSplit {
+			treeLabel = "tree ●"
+		}
 		helpKeys = []helpKey{
 			{"space", playLabel},
 			{"→/←", "step"},
-			{"T", "tree"},
+			{"T", treeLabel},
 			{"tab", codeLabel},
 			{"+/-", "speed"},
 			{"/", "go to step"},
@@ -418,7 +416,7 @@ func (m Model) View() string {
 
 	case viewTree:
 		if m.selectedSession != nil {
-			content = renderTree(m.treeViewState())
+			content = renderTree(m.treeViewState(m.width, m.height))
 		}
 		changedLabel := "changed only"
 		if m.treeChangedOnly {

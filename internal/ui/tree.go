@@ -220,8 +220,15 @@ func treeLegend(v treeView) string {
 	if deleted > 0 {
 		parts = append(parts, deletedStyle.Render(fmt.Sprintf("%d removed", deleted)))
 	}
-	return "  " + strings.Join(parts, mutedStyle.Render(" · ")) +
-		mutedStyle.Render("   structure from disk now · marks from the session")
+	line := "  " + strings.Join(parts, mutedStyle.Render(" · "))
+
+	// The caveat about which half is which only fits the full-width view. In a
+	// sidebar it would be clipped mid-sentence, which is worse than absent —
+	// the full view is a keypress away and states it in full.
+	if note := "   structure from disk now · marks from the session"; v.width >= 72 {
+		line += mutedStyle.Render(note)
+	}
+	return line
 }
 
 // renderTreeRow draws one row: the box-drawing stem, the name coloured by what
@@ -350,6 +357,25 @@ func treeFadeStage(since time.Duration) int {
 // thousands of entries and the view redraws many times a second while a replay
 // plays.
 func (m *Model) openTree(sess *session.Session) {
+	m.loadTreeFor(sess)
+	m.treeGen++
+	m.mode = viewTree
+
+	if m.replaySteps == nil {
+		// Opened without a replay: show everything the session ended up doing.
+		m.replaySteps = session.BuildReplay(sess)
+		m.replayIndex = max(0, len(m.replaySteps)-1)
+		m.replayStepAt = time.Now()
+	}
+	if m.treeRoot == nil {
+		m.statusMsg = "Could not read this session's project directory"
+	}
+}
+
+// loadTreeFor reads the project directory and the session's activity. Separate
+// from opening the view because the sidebar needs the data without the mode
+// change.
+func (m *Model) loadTreeFor(sess *session.Session) {
 	m.selectedSession = sess
 	m.treeActivity = session.BuildFileActivity(sess)
 
@@ -363,23 +389,11 @@ func (m *Model) openTree(sess *session.Session) {
 	}
 	m.treeCursor = 0
 	m.treeScroll = 0
-	m.treeGen++
-	m.mode = viewTree
-
-	if m.replaySteps == nil {
-		// Opened without a replay: show everything the session ended up doing.
-		m.replaySteps = session.BuildReplay(sess)
-		m.replayIndex = max(0, len(m.replaySteps)-1)
-		m.replayStepAt = time.Now()
-	}
-	if m.treeRoot == nil {
-		m.statusMsg = "Could not read " + root
-	}
 }
 
 // treeViewState assembles what the renderer needs, including the rows, which
 // depend on the replay position and the filter.
-func (m Model) treeViewState() treeView {
+func (m Model) treeViewState(width, height int) treeView {
 	upto := m.treeUpto()
 	rows := flattenTree(m.treeRoot, m.treeCollapsed, m.treeActivity, upto, m.treeChangedOnly)
 
@@ -394,8 +408,8 @@ func (m Model) treeViewState() treeView {
 		cursor:    clampInt(m.treeCursor, 0, max(0, len(rows)-1)),
 		scroll:    m.treeScroll,
 		changedOn: m.treeChangedOnly,
-		width:     m.width,
-		height:    m.height,
+		width:     width,
+		height:    height,
 	}
 }
 
@@ -592,4 +606,101 @@ func (m Model) openFileInReplay(path string) (tea.Model, tea.Cmd) {
 	}
 	m.statusMsg = "No replay step for that change"
 	return m, clearStatusAfter()
+}
+
+// Replay with the tree beside it.
+//
+// All keys stay with the replay and the tree follows, which is the whole reason
+// this is cheap to add: there is no focus to switch, no second cursor, and no
+// key that means one thing on the left and another on the right. Navigating the
+// tree is what the full-screen view is for.
+
+// Sidebar sizing. Code needs room to read, so the tree gets a third of the
+// terminal and never more than treeSidebarMax; below splitMinWidth there is not
+// enough left for the code and the split refuses rather than showing both
+// badly.
+const (
+	splitMinWidth  = 100
+	treeSidebarMax = 40
+	treeSidebarMin = 24
+)
+
+// sidebarWidth is how much the tree gets, or 0 when the terminal is too narrow
+// to split at all.
+//
+// It takes the terminal's full width and reserves the last column itself, so
+// the floor means what it says: a 100-column terminal splits.
+func sidebarWidth(terminal int) int {
+	if terminal < splitMinWidth {
+		return 0
+	}
+	w := usableWidth(terminal) / 3
+	if w > treeSidebarMax {
+		w = treeSidebarMax
+	}
+	if w < treeSidebarMin {
+		return 0
+	}
+	return w
+}
+
+// joinPanes lays two rendered blocks side by side, separated by a rule.
+//
+// Each row is padded to its pane's exact width before the next pane starts,
+// because a row that falls short lets the right-hand pane slide left on that
+// line alone, and one that overruns pushes it off the screen. Tabs are expanded
+// and styles closed for the same reason they are everywhere else: a tab is not
+// one column, and an unterminated colour bleeds across the divider.
+func joinPanes(left, right string, leftWidth, rightWidth, rows int) string {
+	l := strings.Split(strings.TrimRight(left, "\n"), "\n")
+	r := strings.Split(strings.TrimRight(right, "\n"), "\n")
+	divider := mutedStyle.Render(" │ ")
+
+	var b strings.Builder
+	for i := 0; i < rows; i++ {
+		b.WriteString(padPane(row(l, i), leftWidth))
+		b.WriteString(divider)
+		b.WriteString(padPane(row(r, i), rightWidth))
+		if i < rows-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func row(rows []string, i int) string {
+	if i < len(rows) {
+		return rows[i]
+	}
+	return ""
+}
+
+// padPane makes one row occupy exactly width columns.
+func padPane(s string, width int) string {
+	s = expandTabs(s)
+	if n := visibleLen(s); n > width {
+		return truncateVisible(s, width)
+	} else if n < width {
+		// Close any open style before the padding, so a coloured row does not
+		// paint its background across the gap and into the divider.
+		return s + "\x1b[0m" + strings.Repeat(" ", width-n)
+	}
+	return s + "\x1b[0m"
+}
+
+// renderSplit draws the replay with the tree beside it, or just the replay when
+// the terminal cannot take both.
+func renderSplit(m Model) string {
+	side := sidebarWidth(m.width)
+	if side == 0 {
+		return renderReplay(m.replayViewState(m.width, m.height))
+	}
+
+	// The divider costs three columns between the panes.
+	main := usableWidth(m.width) - side - 3
+	rows := max(1, m.height-1)
+
+	tree := renderTree(m.treeViewState(side, rows))
+	replay := renderReplay(m.replayViewState(main, rows))
+	return joinPanes(tree, replay, side, main, rows)
 }
