@@ -188,8 +188,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.refreshSessions()
 
-		if m.mode == viewReplay {
+		// The tree is driven by the replay, so its steps have to be rebuilt in
+		// either view — not only the one the replay is showing in.
+		if m.mode == viewReplay || m.mode == viewTree {
 			m.rebuildReplay(anchor)
+
+			// And the tree's own data: a snapshot from whenever it was opened
+			// never gains the file the agent just created.
+			if m.treeRoot != nil {
+				m.refreshTree()
+			}
+
 			// A replay that had caught up now has more to play.
 			if wasWaiting && !m.replayAtEnd() {
 				m.replayTyped = 0

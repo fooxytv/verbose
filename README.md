@@ -203,7 +203,10 @@ re-render regardless of size.
 
 ### Following a live session
 
-Replay follows a session that is still being written. The step count updates on
+Replay follows a session that is still being written, and so does the tree: when
+the transcript grows its steps are rebuilt and the tree re-reads both the
+session's activity and the project directory, so a file the agent has just
+created appears. The step count updates on
 its own as the transcript grows — `300/300` becomes `300/312` without any
 keypress — and when playback reaches the last recorded step it holds, `◴ live`,
 then plays the new ones as they arrive. It reads at human speed while the agent works

@@ -378,6 +378,30 @@ func (m *Model) openTree(sess *session.Session) {
 // change.
 func (m *Model) loadTreeFor(sess *session.Session) {
 	m.selectedSession = sess
+	if m.treeCollapsed == nil {
+		m.treeCollapsed = make(map[string]bool)
+	}
+	m.treeCursor = 0
+	m.treeScroll = 0
+	m.treeFollow = true
+	m.refreshTree()
+}
+
+// refreshTree re-reads the session's activity and the project directory,
+// keeping where the reader is.
+//
+// Called again whenever the transcript grows, so a tree opened on a running
+// session keeps up: a file the agent has just created appears, and its touches
+// register. Without it the tree was a snapshot from whenever it was opened —
+// the follow moved within what it already knew and nothing new ever arrived.
+// Measured at 15ms on the largest session here, against store updates that are
+// debounced to half a second, so it is affordable at that rate and nowhere
+// near a per-frame cost.
+func (m *Model) refreshTree() {
+	sess := m.selectedSession
+	if sess == nil {
+		return
+	}
 	m.treeActivity = session.BuildFileActivity(sess)
 
 	root := sess.Info.CWD
@@ -392,13 +416,6 @@ func (m *Model) loadTreeFor(sess *session.Session) {
 	// call happened to name a file.
 	paths := session.TreePaths(m.treeRoot)
 	session.AttachShellReads(m.treeActivity, sess, func(p string) bool { return paths[p] })
-
-	if m.treeCollapsed == nil {
-		m.treeCollapsed = make(map[string]bool)
-	}
-	m.treeCursor = 0
-	m.treeScroll = 0
-	m.treeFollow = true
 }
 
 // treeViewState assembles what the renderer needs, including the rows, which

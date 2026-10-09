@@ -2192,3 +2192,74 @@ func TestReplayControlsCloseTheDiffAndCarryOn(t *testing.T) {
 		t.Errorf("diffScroll = %d, want 1", m.diffScroll)
 	}
 }
+
+// A tree opened on a running session has to keep up: a file the agent creates
+// after it was opened must appear, and its touches must register. Without the
+// refresh the tree was a snapshot from whenever it was opened — the follow moved
+// within what it already knew and nothing new ever arrived.
+func TestTreePicksUpNewWorkOnAStoreUpdate(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "a.go")
+	if err := os.WriteFile(first, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	edit := func(path string) session.Event {
+		return session.Event{Type: session.EventToolUse, ToolName: "Edit",
+			ToolInput: map[string]interface{}{"file_path": path},
+			Result: &session.ToolResult{FilePath: path,
+				StructuredPatch: []session.PatchHunk{{Lines: []string{"+x"}}}}}
+	}
+
+	sess := &session.Session{
+		Info:   session.SessionInfo{ID: "live", CWD: root, LastUpdate: time.Now()},
+		Events: []session.Event{{Type: session.EventUserPrompt, UserText: "go"}, edit(first)},
+	}
+
+	store, err := session.NewStore()
+	if err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	m := Model{width: 160, height: 24, version: "0.0.0", store: store}
+	m.replaySteps = session.BuildReplay(sess)
+	m.loadTreeFor(sess)
+	m.mode = viewTree
+	m.replayIndex = len(m.replaySteps) - 1
+
+	if len(m.treeActivity) != 1 {
+		t.Fatalf("tracking %d files to start, want 1", len(m.treeActivity))
+	}
+
+	// The agent carries on: a new file on disk, and a new event for it.
+	second := filepath.Join(root, "b.go")
+	if err := os.WriteFile(second, []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sess.Events = append(sess.Events, edit(second))
+	sess.Info.LastUpdate = time.Now()
+
+	// What the watcher's update does.
+	res, _ := m.Update(sessionsUpdatedMsg{})
+	m = res.(Model)
+
+	if m.treeActivity[second] == nil {
+		t.Error("the newly edited file never reached the tree's activity")
+	}
+	if !session.TreePaths(m.treeRoot)[second] {
+		t.Error("the newly created file never appeared in the tree")
+	}
+	if n := len(m.replaySteps); n != 3 {
+		t.Errorf("replay steps = %d, want 3: the new event should be a step", n)
+	}
+
+	// And the reader's place survives the refresh.
+	m.treeCollapsed[root] = true
+	m.treeCursor = 0
+	res, _ = m.Update(sessionsUpdatedMsg{})
+	m = res.(Model)
+	if !m.treeCollapsed[root] {
+		t.Error("a refresh must not forget which directories were closed")
+	}
+}
