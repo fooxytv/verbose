@@ -1979,3 +1979,155 @@ func TestTreeMoveStartsFromTheHighlightedRow(t *testing.T) {
 			m.treeCursor, sel+1)
 	}
 }
+
+// What gets run has to be right: the CLI takes a positional prompt alongside
+// --resume, verified against the real binary, which rejects only an unknown
+// session id.
+func TestContinueArgs(t *testing.T) {
+	cases := []struct {
+		name, id, prompt string
+		wantCLI          string
+		wantArgs         []string
+	}{
+		{"claude with a reply", "abc-123", "add a timer",
+			"claude", []string{"--resume", "abc-123", "add a timer"}},
+		{"claude, empty reply is a plain resume", "abc-123", "   ",
+			"claude", []string{"--resume", "abc-123"}},
+		{"opencode takes --session and --prompt", "oc-xyz", "add a timer",
+			"opencode", []string{"--session", "xyz", "--prompt", "add a timer"}},
+		{"opencode, empty reply", "oc-xyz", "",
+			"opencode", []string{"--session", "xyz"}},
+	}
+	for _, c := range cases {
+		cli, args := continueArgs(c.id, c.prompt)
+		if cli != c.wantCLI {
+			t.Errorf("%s: cli = %q, want %q", c.name, cli, c.wantCLI)
+		}
+		if strings.Join(args, "\x00") != strings.Join(c.wantArgs, "\x00") {
+			t.Errorf("%s: args = %q, want %q", c.name, args, c.wantArgs)
+		}
+	}
+
+	// A reply longer than the box allows is cut rather than passed on whole.
+	_, args := continueArgs("x", strings.Repeat("a", continueMaxReply+500))
+	if n := len([]rune(args[2])); n != continueMaxReply {
+		t.Errorf("prompt passed through at %d runes, want it capped at %d", n, continueMaxReply)
+	}
+}
+
+// The panel shows what the session last said, which means its closing message
+// rather than the last tool call or system note.
+func TestLastAssistantText(t *testing.T) {
+	sess := &session.Session{Events: []session.Event{
+		{Type: session.EventText, Text: "an earlier thing"},
+		{Type: session.EventText, Text: "the closing message"},
+		{Type: session.EventToolUse, ToolName: "Bash",
+			ToolInput: map[string]interface{}{"command": "echo done"}},
+		{Type: session.EventTurnDuration, TurnDurationMs: 10},
+		{Type: session.EventText, Text: "   "},
+	}}
+	if got := lastAssistantText(sess); got != "the closing message" {
+		t.Errorf("lastAssistantText = %q, want the last non-empty text", got)
+	}
+	if got := lastAssistantText(&session.Session{}); got != "" {
+		t.Errorf("empty session = %q, want empty", got)
+	}
+	if got := lastAssistantText(nil); got != "" {
+		t.Errorf("nil session = %q, want empty", got)
+	}
+}
+
+func TestContinueUnsupportedExplainsItself(t *testing.T) {
+	ok := &session.Session{Info: session.SessionInfo{ID: "a", CWD: "/repo"}}
+	if got := continueUnsupported(ok); got != "" {
+		t.Errorf("a normal session = %q, want it supported", got)
+	}
+	agent := &session.Session{Info: session.SessionInfo{ID: "agent-x", CWD: "/repo", IsAgent: true}}
+	if got := continueUnsupported(agent); !strings.Contains(got, "subagent") {
+		t.Errorf("subagent = %q, want it to say why", got)
+	}
+	noCWD := &session.Session{Info: session.SessionInfo{ID: "a"}}
+	if got := continueUnsupported(noCWD); !strings.Contains(got, "working directory") {
+		t.Errorf("no cwd = %q, want it to say why", got)
+	}
+}
+
+// The panel is a text box: it takes every key, and must not leak them to the
+// view underneath.
+func TestContinueTyping(t *testing.T) {
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.width, m.height = 160, 24
+	m.replayPlaying = true
+	m.openContinue()
+
+	if m.replayPlaying {
+		t.Error("opening the panel should stop playback")
+	}
+
+	before := m.replayIndex
+	for _, r := range "add a timer" {
+		res, _ := m.handleKey(runeKey(string(r)))
+		m = res.(Model)
+	}
+	if m.continueDraft != "add a timer" {
+		t.Fatalf("draft = %q, want the typed text", m.continueDraft)
+	}
+	// "d" and "a" would otherwise open a diff and do other things.
+	if m.diffPath != "" {
+		t.Error("typing must not reach the keybindings underneath")
+	}
+	if m.replayIndex != before {
+		t.Error("typing must not move the replay")
+	}
+
+	res, _ := m.handleKey(namedKey(tea.KeyBackspace))
+	m = res.(Model)
+	if m.continueDraft != "add a time" {
+		t.Errorf("draft = %q after backspace", m.continueDraft)
+	}
+
+	res, _ = m.handleKey(namedKey(tea.KeyCtrlU))
+	m = res.(Model)
+	if m.continueDraft != "" {
+		t.Errorf("draft = %q after ctrl+u, want empty", m.continueDraft)
+	}
+
+	res, _ = m.handleKey(namedKey(tea.KeyEsc))
+	m = res.(Model)
+	if m.continueOpen {
+		t.Error("esc should close the panel")
+	}
+}
+
+func TestContinuePanelNeverOverflows(t *testing.T) {
+	m := treeModel(t)
+	m.selectedSession.Events = append(m.selectedSession.Events, session.Event{
+		Type: session.EventText,
+		Text: strings.Repeat("a long closing message that goes on and on ", 40),
+	})
+	m.openContinue()
+	m.continueDraft = strings.Repeat("a reply that is itself quite long ", 10)
+
+	for _, mode := range []viewMode{viewReplay, viewTree} {
+		for _, split := range []bool{false, true} {
+			for _, size := range []struct{ w, h int }{{60, 12}, {100, 24}, {160, 30}} {
+				v := m
+				v.mode = mode
+				v.treeSplit = split
+				v.width, v.height = size.w, size.h
+
+				rows := visibleLines(v.View())
+				if len(rows) > size.h {
+					t.Errorf("%dx%d: %d rows, want at most %d", size.w, size.h, len(rows), size.h)
+				}
+				for i, r := range rows {
+					if n := terminalColumns(r); n >= size.w {
+						t.Fatalf("mode %v split=%v at %dx%d: row %d draws %d columns\n  %q",
+							mode, split, size.w, size.h, i, n, stripAnsi(r))
+					}
+				}
+			}
+		}
+	}
+}

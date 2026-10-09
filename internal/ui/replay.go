@@ -1001,6 +1001,11 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		}
 		return m, tea.Batch(m.replayAdvanceCmd(), clearStatusAfter())
 
+	case "c":
+		// Pick the session back up: what it last said, and a box to reply in.
+		m.openContinue()
+		return m, nil
+
 	case "T":
 		// Show the tree beside the replay, rather than instead of it. Keys stay
 		// with the replay and the tree follows, so there is no focus to switch.

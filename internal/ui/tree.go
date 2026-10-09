@@ -646,6 +646,10 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "c":
+		m.openContinue()
+		return m, nil
+
 	case "d", "D":
 		m.openDiff()
 		return m, clearStatusAfter()

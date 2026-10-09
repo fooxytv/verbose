@@ -89,7 +89,13 @@ func TestRenderRealOpenCodeSessions(t *testing.T) {
 	}
 }
 
-// Renders every replay step of every real transcript, at a few terminal sizes.
+// maxStepsPerSession bounds the smoke sweep: enough steps to catch a layout
+// mistake anywhere in a session, few enough that the suite stays quick enough
+// to run on every change.
+const maxStepsPerSession = 40
+
+// Renders a spread of replay steps from every real transcript, at a few
+// terminal sizes.
 // Replay does its own width and scroll arithmetic, so this is where an
 // off-by-one or a negative slice bound shows up.
 func TestRenderRealReplays(t *testing.T) {
@@ -119,8 +125,14 @@ func TestRenderRealReplays(t *testing.T) {
 		}
 		withSteps++
 
+		// Sample steps rather than walk every one. Each step may lex and
+		// highlight a whole file, so an exhaustive sweep grew to 54 seconds as
+		// the transcripts did — slow enough that the suite stops being run.
+		// A stride keeps the coverage spread across the session.
+		stride := 1 + len(steps)/maxStepsPerSession
+
 		for _, sz := range sizes {
-			for i := range steps {
+			for i := 0; i < len(steps); i += stride {
 				out := renderReplay(replayView{sess: sess, steps: steps, idx: i, scroll: 0, typed: -1, playing: false, delay: replayDefaultDelay, width: sz.w, height: sz.h})
 				if strings.TrimSpace(out) == "" {
 					t.Fatalf("%s: step %d rendered empty at %dx%d", p, i, sz.w, sz.h)
@@ -138,6 +150,13 @@ func TestRenderRealReplays(t *testing.T) {
 						delay: replayDefaultDelay, width: sz.w, height: sz.h})
 				}
 			}
+			// The ends of a session are where off-by-ones live, and a stride
+			// can step over the last one.
+			for _, i := range []int{0, len(steps) - 1} {
+				renderReplay(replayView{sess: sess, steps: steps, idx: i, typed: -1,
+					delay: replayDefaultDelay, width: sz.w, height: sz.h})
+			}
+
 			// Out-of-range indices, scrolls and reveal budgets must clamp.
 			renderReplay(replayView{sess: sess, steps: steps, idx: -5, scroll: -3, typed: -1, playing: true, delay: replayDefaultDelay, width: sz.w, height: sz.h})
 			renderReplay(replayView{sess: sess, steps: steps, idx: len(steps) + 10, scroll: 9999, typed: 99999, playing: true, delay: replayDefaultDelay, width: sz.w, height: sz.h})

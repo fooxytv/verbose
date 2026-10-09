@@ -140,6 +140,7 @@ In the replay view:
 | `]` / `[` | Move the tree selection (with the sidebar open) |
 | `}` / `{` | Open / close a directory in the sidebar |
 | `d` | Open the selected file's diff (`d` or `Esc` closes) |
+| `c` | Continue the session: see its last output and reply |
 | `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
 
@@ -341,6 +342,26 @@ skipped rather than guessed at, because naming the wrong file as deleted is
 worse than naming none. For the same reason a file written through the shell is
 reported as *written* rather than created or edited — whether it existed
 beforehand is nowhere in the transcript.
+
+## Picking a session back up
+
+`c` in a replay or the tree opens the **continue panel**: what the session last
+said, and a box to reply in. Type, press enter, and the CLI opens **beside**
+verbose — a tmux split where there is one, otherwise a new terminal tab — with
+that session resumed and your reply already sent. The replay, the tree and your
+place in them stay on screen.
+
+An empty reply is a plain resume, which is what `c` has always done. Claude
+sessions resume with `claude --resume <id> "<reply>"`; OpenCode with
+`opencode --session <id> --prompt "<reply>"`.
+
+The reply is handed to the CLI rather than run inside verbose. Verbose reads
+transcripts; running a session in-process would mean carrying a PTY and an ANSI
+parser to end up with a worse tmux.
+
+A subagent's own transcript cannot be replied to — open its parent session —
+and neither can one that recorded no working directory, since there would be
+nowhere to start the CLI. The panel says so rather than failing quietly.
 
 ## How it works
 

@@ -86,6 +86,12 @@ type Model struct {
 	// takes the replay's pane while it is open.
 	diffPath   string
 	diffScroll int
+
+	// The continue panel, opened with "c": what the session last said, and a
+	// box to reply in. The reply is handed to the CLI, not run here.
+	continueOpen   bool
+	continueDraft  string
+	continueScroll int
 	// treeGen invalidates fade ticks left over from an earlier step.
 	treeGen int
 
@@ -382,6 +388,8 @@ func (m Model) View() string {
 	case viewReplay:
 		if m.selectedSession != nil {
 			switch {
+			case m.continueOpen:
+				content = renderContinueSplit(m)
 			case m.diffPath != "":
 				content = renderDiffSplit(m)
 			case m.treeSplit:
@@ -441,9 +449,12 @@ func (m Model) View() string {
 
 	case viewTree:
 		if m.selectedSession != nil {
-			if m.diffPath != "" {
+			switch {
+			case m.continueOpen:
+				content = renderContinueSplit(m)
+			case m.diffPath != "":
 				content = renderDiffSplit(m)
-			} else {
+			default:
 				content = renderTree(m.treeViewState(usableWidth(m.width), m.height))
 			}
 		}
@@ -485,6 +496,9 @@ func (m Model) View() string {
 	switch {
 	case m.confirmDelete != nil:
 		help = deletePrompt(*m.confirmDelete)
+	case m.continueOpen:
+		help = searchPromptStyle.Render(" reply ") + " " +
+			mutedStyle.Render("enter to open the CLI beside verbose · ↑/↓ read · esc cancel")
 	case m.diffPath != "" && m.statusMsg == "":
 		helpKeys = []helpKey{
 			{"↑/↓", "scroll"},
@@ -678,6 +692,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// every letter of the query would trigger a command.
 	if m.searchTyping {
 		return m.handleSearchKey(msg, key)
+	}
+
+	// The continue panel is a text box, so it takes every key.
+	if m.continueOpen {
+		return m.handleContinueKey(msg, key)
 	}
 
 	// The diff panel is modal: while it is open the arrows scroll it, not
