@@ -265,7 +265,9 @@ With a file selected in the tree, **`d` opens its diff** in the right-hand
 pane — old on the left, new on the right, with line numbers, pairing each
 removed line against the one that replaced it. `[` and `]` step to the next
 file and the diff follows, so a run of changes can be read without closing it.
-`d` or `Esc` closes it.
+`d` or `Esc` closes it, and so does any replay control — `Space` closes the
+panel and plays on, `←`/`→` close it and step — since reaching for those means
+you are done reading.
 
 Opening a diff pauses playback: reading a diff and watching code stream are not
 things anyone does at once, and the pane the diff needs is the one the replay

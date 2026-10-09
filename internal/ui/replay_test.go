@@ -2131,3 +2131,64 @@ func TestContinuePanelNeverOverflows(t *testing.T) {
 		}
 	}
 }
+
+// A replay control pressed while the diff is open means "done reading, carry
+// on". Swallowing them left the panel open, the replay paused and the tree
+// frozen — pressing play appeared to do nothing at all.
+func TestReplayControlsCloseTheDiffAndCarryOn(t *testing.T) {
+	base := treeModel(t)
+	base.mode = viewReplay
+	base.treeSplit = true
+	base.width, base.height = 160, 24
+	base.replayIndex = 1
+
+	openDiff := func() Model {
+		res, _ := base.handleKey(runeKey("d"))
+		m := res.(Model)
+		if m.diffPath == "" {
+			t.Fatal("d should have opened a diff")
+		}
+		if m.treeFollowing() {
+			t.Fatal("opening a diff should stop the follow")
+		}
+		return m
+	}
+
+	// Play: the panel closes, the replay runs, and the tree follows again.
+	m := openDiff()
+	res, _ := m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	m = res.(Model)
+	if m.diffPath != "" {
+		t.Error("space should close the diff")
+	}
+	if !m.replayPlaying {
+		t.Error("space should start the replay")
+	}
+	if !m.treeFollowing() {
+		t.Error("the tree should follow again once the replay is running")
+	}
+
+	// Stepping on: the panel closes and the step lands.
+	m = openDiff()
+	before := m.replayIndex
+	res, _ = m.handleKey(namedKey(tea.KeyRight))
+	m = res.(Model)
+	if m.diffPath != "" {
+		t.Error("right should close the diff")
+	}
+	if m.replayIndex != before+1 {
+		t.Errorf("replayIndex = %d, want %d: the step should have landed",
+			m.replayIndex, before+1)
+	}
+
+	// But reading keys still belong to the panel.
+	m = openDiff()
+	res, _ = m.handleKey(namedKey(tea.KeyDown))
+	m = res.(Model)
+	if m.diffPath == "" {
+		t.Error("down should scroll the diff, not close it")
+	}
+	if m.diffScroll != 1 {
+		t.Errorf("diffScroll = %d, want 1", m.diffScroll)
+	}
+}

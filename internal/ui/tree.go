@@ -1014,6 +1014,18 @@ func renderDiffSplit(m Model) string {
 func (m Model) handleDiffKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 	visible := max(1, m.height-6)
 
+	// A replay control means "done reading, carry on": close the panel and let
+	// the replay have the key. Swallowing them left the panel open, the replay
+	// paused and the tree frozen, with pressing play appearing to do nothing
+	// at all.
+	if msg.Type == tea.KeySpace || key == "right" || key == "left" {
+		m.closeDiff()
+		if m.mode == viewTree {
+			return m.handleTreeKey(msg, key)
+		}
+		return m.handleReplayKey(msg, key)
+	}
+
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
