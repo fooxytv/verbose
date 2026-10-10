@@ -84,12 +84,24 @@ the local install.
 `go vet` and `go test` on linux, macOS and windows, plus a cross-compile of all
 six release targets.
 
-**Windows tests run but do not gate.** The first run on `windows-latest` failed
-21 pre-existing tests — CI had never run there before, so the breakage was
-invisible behind a cross-compile that passes. One of them is a real runtime bug
-(`delete.go` removes a file it still has open, which POSIX allows and Windows
-does not), and `~/.Trash` has no Windows equivalent at all. Tracked in issue #2;
-the job is left in the matrix so the state stays visible.
+**Windows is tested, and three traps there are worth not re-learning:**
+
+- **`$HOME` does not redirect the home directory.** Everything resolves home
+  through `os.UserHomeDir()`, which reads `%USERPROFILE%` on Windows. A test
+  that sets only `HOME` isolates nothing there — it reads the real profile and
+  fails on a path it never meant to touch. `isolatedHome` and `deleteFixture`
+  set both.
+- **A file cannot be removed while a handle is open.** `copyThenRemove` closes
+  the source explicitly before `os.Remove`; a `defer` alone runs too late and
+  leaves the original in place with a copy already in the trash.
+- **Short paths are full of tildes** (`C:\Users\RUNNER~1\...`). A tilde only
+  expands at the start of a word, so `shellRemovals` rejects a leading one and
+  nothing else — treating them all as expansions meant no deletion was ever
+  recognised on Windows.
+
+The trash is not the Recycle Bin there, which needs a shell API call verbose
+does not make. Files go to `%USERPROFILE%\.local\share\Trash\files`, which
+the README now says.
 
 That last job exists because **a tag used to be the first time those targets
 were built**. goreleaser runs *after* the tag exists, so a target that does not

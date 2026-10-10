@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -18,6 +19,14 @@ func deleteFixture(t *testing.T) (Model, string) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Windows resolves the home directory from %USERPROFILE%, not $HOME, and
+	// every production path goes through os.UserHomeDir(). Setting only HOME
+	// left the fixture writing to a temp directory while the store read the
+	// real C:\Users\runneradmin, so thirteen tests failed on a path that was
+	// never meant to be involved.
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
 
 	transcript := filepath.Join(home, ".claude", "projects", "-repo", "abc123.jsonl")

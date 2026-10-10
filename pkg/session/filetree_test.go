@@ -24,6 +24,12 @@ func TestShellRemovalsOnlyWhenCertain(t *testing.T) {
 		{"variable", "rm $TMP/x", nil},
 		{"substitution", "rm `ls`", nil},
 		{"home", "rm ~/thing", nil},
+		// ...but only at the start of a word. A tilde inside a path is an
+		// ordinary character, and Windows 8.3 short paths are built from them,
+		// so rejecting the lot meant no deletion was ever recognised there.
+		{"tilde inside a path", `rm C:\Users\RUNNER~1\Temp\gone.txt`,
+			[]string{`C:\Users\RUNNER~1\Temp\gone.txt`}},
+		{"tilde inside a unix path", "rm /tmp/build~2/old.go", []string{"/tmp/build~2/old.go"}},
 		{"not rm at all", "rmdir empty", nil},
 		{"rm inside a word", "npm run rm-stuff", nil},
 	}

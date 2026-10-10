@@ -281,7 +281,15 @@ func shellRemovals(cmd string) []string {
 			if strings.HasPrefix(arg, "-") {
 				continue
 			}
-			if strings.ContainsAny(arg, "*?[]{}$`\"'~") {
+			// A tilde expands to the home directory only at the START of a
+			// word. One in the middle is an ordinary character, and Windows
+			// short paths are full of them — C:\Users\RUNNER~1\AppData\...
+			// — so rejecting the lot meant no deletion was ever recognised
+			// there.
+			if strings.HasPrefix(arg, "~") {
+				continue
+			}
+			if strings.ContainsAny(arg, "*?[]{}$`\"'") {
 				continue // a glob or an expansion: which files is unknowable here
 			}
 			if !plausiblePath(arg) {

@@ -498,6 +498,13 @@ Press `d` on a session and confirm with `y` — any other key cancels.
 Claude Code transcripts are files, so they are **moved to the Trash** along with any
 todo lists belonging to the session, and can be restored from there.
 
+Where "the Trash" is depends on the platform: `~/.Trash` on macOS, the
+freedesktop location (`$XDG_DATA_HOME/Trash/files`, or `~/.local/share/Trash/files`)
+on Linux. **On Windows it is not the Recycle Bin** — the Recycle Bin needs a
+shell API call that verbose does not make, so files land in
+`%USERPROFILE%\.local\share\Trash\files` instead. They are recoverable, just
+not through the usual restore.
+
 OpenCode sessions live as rows in one shared SQLite database, which is unsafe to write
 to underneath a running OpenCode. Deletion is handed to `opencode session delete`, so it
 needs the `opencode` CLI on your PATH and is **permanent**. The confirmation prompt says

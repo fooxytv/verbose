@@ -199,6 +199,11 @@ func copyThenRemove(path, dest string) error {
 	if err != nil {
 		return err
 	}
+	// Closed explicitly before the Remove at the end of this function, not
+	// only on the way out. Windows refuses to delete a file that still has an
+	// open handle, so a deferred close alone left the source behind and the
+	// delete half-done — the copy in the trash, the original still in place.
+	// The defer stays to cover the early returns; closing twice is harmless.
 	defer src.Close()
 
 	info, err := src.Stat()
@@ -221,6 +226,9 @@ func copyThenRemove(path, dest string) error {
 		return err
 	}
 
+	if err := src.Close(); err != nil {
+		return err
+	}
 	return os.Remove(path)
 }
 

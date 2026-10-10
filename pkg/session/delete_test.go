@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,6 +14,14 @@ func isolatedHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Windows resolves the home directory from %USERPROFILE%, not $HOME, and
+	// every production path goes through os.UserHomeDir(). Setting only HOME
+	// left the fixture writing to a temp directory while the store read the
+	// real C:\Users\runneradmin, so thirteen tests failed on a path that was
+	// never meant to be involved.
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 	// trashDir consults XDG_DATA_HOME first on non-darwin platforms.
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
 	return home
@@ -257,6 +266,14 @@ func TestCopyThenRemove(t *testing.T) {
 // without touching a real OpenCode database.
 func stubOpenCode(t *testing.T, script string) {
 	t.Helper()
+	// The stub is a /bin/sh script. Windows has no shebang handling and
+	// CreateProcess cannot run a .bat directly, so there is no faithful
+	// equivalent — and what these tests cover is verbose's argument handling,
+	// which is identical on every platform. Skipping is honest; a batch
+	// translation of arbitrary shell would be testing the translation.
+	if runtime.GOOS == "windows" {
+		t.Skip("no portable way to stub a CLI on Windows; see issue #2")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {

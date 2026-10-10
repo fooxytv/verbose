@@ -16,10 +16,6 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # windows-latest runs but is NOT a required check: the first run on it failed
-  # 21 pre-existing tests, none of which this workflow introduced. See issue #2.
-  # The job stays in the matrix so the state is visible rather than forgotten;
-  # put it back in the branch protection required list once #2 is closed.
   test:
     name: test (${{ matrix.os }})
     strategy:
