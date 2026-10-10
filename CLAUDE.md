@@ -98,6 +98,11 @@ six release targets.
   expands at the start of a word, so `shellRemovals` rejects a leading one and
   nothing else — treating them all as expansions meant no deletion was ever
   recognised on Windows.
+- **`/repo` is not an absolute path there.** `filepath.IsAbs` wants a drive
+  letter, so a unix-style root in a fixture gets joined onto the cwd and
+  nothing matches. Build test paths from `testRoot()`, which is `C:\repo` on
+  Windows. The production code is fine — a real Windows transcript records
+  `C:\...`.
 
 The trash is not the Recycle Bin there, which needs a shell API call verbose
 does not make. Files go to `%USERPROFILE%\.local\share\Trash\files`, which
