@@ -109,10 +109,18 @@ func TestDescribeEventReportsPartialRead(t *testing.T) {
 // Paths are shown relative to the session's cwd, so a step reads as a filename
 // rather than a full home-directory path.
 func TestRelPathShortensAgainstCWD(t *testing.T) {
+	root := testRoot()
+	// Outside the project, so it is returned whole rather than shortened.
+	elsewhere := filepath.Join(filepath.Dir(root), "elsewhere", "c.go")
+
 	cases := []struct{ path, cwd, want string }{
-		{"/repo/a/b.go", "/repo", "a/b.go"},
-		{"/elsewhere/c.go", "/repo", "/elsewhere/c.go"},
-		{"", "/repo", "a file"},
+		// relPath produces DISPLAY text, so it carries the platform's
+		// separator: a Windows reader looking at a Windows transcript wants
+		// a\b.go, not a/b.go. The expectation is built the same way rather
+		// than hardcoding a slash.
+		{filepath.Join(root, "a", "b.go"), root, filepath.Join("a", "b.go")},
+		{elsewhere, root, elsewhere},
+		{"", root, "a file"},
 	}
 	for _, c := range cases {
 		if got := relPath(c.path, c.cwd); got != c.want {
