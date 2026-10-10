@@ -84,29 +84,36 @@ the local install.
 `go vet` and `go test` on linux, macOS and windows, plus a cross-compile of all
 six release targets.
 
-**Windows is tested, and three traps there are worth not re-learning:**
+**Windows is tested. Six things cost a CI round each:**
 
+- **A panic truncates the whole package.** A nil dereference in one test
+  aborted the `pkg/session` binary, so every test after it never ran and the
+  failure list was never complete — four rounds of "fixed it" were each reading
+  a prefix. Assert and `t.Fatal`; never dereference a map lookup in a test.
 - **`$HOME` does not redirect the home directory.** Everything resolves home
   through `os.UserHomeDir()`, which reads `%USERPROFILE%` on Windows. A test
-  that sets only `HOME` isolates nothing there — it reads the real profile and
-  fails on a path it never meant to touch. `isolatedHome` and `deleteFixture`
-  set both.
+  that sets only `HOME` isolates nothing — it reads the real profile. Set both;
+  `isolatedHome` and `deleteFixture` do.
 - **A file cannot be removed while a handle is open.** `copyThenRemove` closes
   the source explicitly before `os.Remove`; a `defer` alone runs too late and
-  leaves the original in place with a copy already in the trash.
+  left the original in place with a copy already in the trash. This one was a
+  real bug, not a test problem — deleting a session could not work.
+- **`/repo` is not an absolute path.** `filepath.IsAbs` wants a drive letter,
+  so a unix-style root in a fixture gets joined onto the cwd and nothing
+  matches. Build test paths from `testRoot()`. The production code is fine — a
+  real Windows transcript records `C:\...`.
+- **Path output carries the platform's separator.** `filepath.Join`, `Clean`
+  and `Rel` all return `\` here, so an expectation with a literal `/` fails.
+  Build the expectation the same way the code does. `Dir` and `Base` are safe:
+  they accept `/` on Windows.
 - **Short paths are full of tildes** (`C:\Users\RUNNER~1\...`). A tilde only
   expands at the start of a word, so `shellRemovals` rejects a leading one and
-  nothing else — treating them all as expansions meant no deletion was ever
-  recognised on Windows.
-- **`/repo` is not an absolute path there.** `filepath.IsAbs` wants a drive
-  letter, so a unix-style root in a fixture gets joined onto the cwd and
-  nothing matches. Build test paths from `testRoot()`, which is `C:\repo` on
-  Windows. The production code is fine — a real Windows transcript records
-  `C:\...`.
+  nothing else. Treating them all as expansions meant no deletion was ever
+  recognised — on Windows, and on `rm /tmp/build~2/old.go` anywhere.
 
-The trash is not the Recycle Bin there, which needs a shell API call verbose
-does not make. Files go to `%USERPROFILE%\.local\share\Trash\files`, which
-the README now says.
+Two things have no Windows equivalent and are skipped rather than faked: a
+`#!/bin/sh` CLI stub, and the Recycle Bin. The trash is
+`%USERPROFILE%\.local\share\Trash\files`, which the README now says.
 
 That last job exists because **a tag used to be the first time those targets
 were built**. goreleaser runs *after* the tag exists, so a target that does not
