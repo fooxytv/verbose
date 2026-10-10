@@ -117,6 +117,27 @@ there is silently dead. Prefer bare characters (`[` `]` `{` `}`); they have no
 modifier to intercept. Verifying that bubbletea *decodes* a sequence is not
 verifying that anything *sends* it.
 
+## Opening an editor
+
+`e` hands the file under the cursor to `$VISUAL`, then `$EDITOR`, then the first
+of `nvim`/`vim`/`vi`/`nano` on `PATH` (`notepad` on Windows). **An editor is
+never a build or install dependency** — nothing in `editor.go` is reached until
+the key is pressed.
+
+- **Only vi-family editors get `+N`.** An editor that does not understand the
+  flag treats it as a second filename and opens an empty buffer called `+12`.
+  `lineArg` returns nothing for anything not on its list; losing the jump beats
+  a bogus buffer.
+- **`$EDITOR` may carry arguments** (`code -w`), so it is split into fields, not
+  taken whole as a binary name.
+- **Check the file is still on disk.** The tree deliberately grafts back deleted
+  files, so a path on screen is not proof of a file.
+- **Stop playback and bump `replayGen`** before launching, or the ticks
+  scheduled during the edit all arrive at once on return.
+- `ReplayStep.CodePath` is display text and cannot be turned back into a path:
+  `relPath` abbreviates to `…/dir/file`, and a step with a real diff has none at
+  all. `ReplayStep.FilePath` is the absolute one.
+
 ## Testing
 
 - `go test ./...` should stay under ~20s. The replay smoke sweep strides

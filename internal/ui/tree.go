@@ -671,6 +671,9 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		m.openDiff()
 		return m, clearStatusAfter()
 
+	case "e", "E":
+		return m, m.editTreeSelection()
+
 	case "tab":
 		m.treeChangedOnly = !m.treeChangedOnly
 		m.treeCursor = 0
@@ -917,9 +920,10 @@ func (m *Model) treeToggleAt(open bool) {
 	}
 }
 
-// handleTreeSidebarKey handles the ctrl+arrow keys that drive the sidebar while
+// handleTreeSidebarKey handles the keys that drive the sidebar while
 // the replay owns the plain ones. It reports whether it consumed the key.
-func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
+func (m *Model) handleTreeSidebarKey(key string, paneHeight int) (tea.Cmd, bool) {
+	var cmd tea.Cmd
 	switch key {
 	case "]", "ctrl+down":
 		m.treeMove(1, paneHeight)
@@ -931,14 +935,16 @@ func (m *Model) handleTreeSidebarKey(key string, paneHeight int) bool {
 		m.treeToggleAt(false)
 	case "d", "D":
 		m.openDiff()
+	case "e", "E":
+		cmd = m.editTreeSelection()
 	case "ctrl+f":
 		// Hand the follow back to the replay.
 		m.treeFollow = true
 	default:
-		return false
+		return nil, false
 	}
 	m.treeGen++
-	return true
+	return cmd, true
 }
 
 // Opening a diff from the tree.
@@ -1050,6 +1056,12 @@ func (m Model) handleDiffKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 	case "esc", "backspace", "d", "D":
 		m.closeDiff()
 		return m, nil
+
+	case "e", "E":
+		// Edit the file being diffed. The panel stays open: coming back to the
+		// diff you were reading is the point, and it redraws from disk-backed
+		// transcript data that the edit cannot invalidate.
+		return m, m.editFile(m.diffPath)
 
 	case "down", "j":
 		m.diffScroll++
