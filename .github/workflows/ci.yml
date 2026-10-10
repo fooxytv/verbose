@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch makes the previous run pointless. Main is
+# exempt: its runs are what the badge and the branch protection read, so they
+# are allowed to finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # go-version-file, never a literal. A pin here said 1.23 while go.mod had
+      # moved to 1.25, and the release build broke on a tag with nothing in the
+      # diff to explain it.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      # The smoke tests read the real transcripts on the machine they run on and
+      # skip when there are none, so on CI they are a compile-and-panic check
+      # rather than a rendering one. That is expected, not a gap to fix here.
+      - run: go test ./...
+
+  cross:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Every target the release builds, built on every change. A tag is a bad
+      # place to discover that one of them does not compile — goreleaser runs
+      # after the tag exists, so the fix needs a new version number.
+      - name: build every release target
+        run: |
+          set -eu
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            echo "=> $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null .
+          done

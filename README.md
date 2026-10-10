@@ -1,5 +1,12 @@
 # verbose
 
+[![CI](https://github.com/fooxytv/verbose/actions/workflows/ci.yml/badge.svg)](https://github.com/fooxytv/verbose/actions/workflows/ci.yml)
+[![Release](https://github.com/fooxytv/verbose/actions/workflows/release.yml/badge.svg)](https://github.com/fooxytv/verbose/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/fooxytv/verbose?label=release)](https://github.com/fooxytv/verbose/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/fooxytv/verbose)](go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/fooxytv/verbose.svg)](https://pkg.go.dev/github.com/fooxytv/verbose/pkg/session)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A terminal UI for browsing and analyzing [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 and [OpenCode](https://opencode.ai) session transcripts.
 
@@ -27,6 +34,7 @@ interactive, color-coded viewer with real-time updates.
 - Live auto-follow mode — watch sessions update in real time
 - Mouse scroll support
 - Filter by project name
+- Open any file in your own editor (`e`) at the line the session changed — no IDE required
 - Resume any session in a new tmux pane or terminal tab, with the right CLI for its source
 - Delete sessions from the machine, with a confirmation step
 
@@ -51,6 +59,12 @@ changed — new files green, changed orange, removed red, untouched dim.
 removed line against the one that replaced it.
 
 ![diff](docs/img/diff.png)
+
+**Your editor** (`e`) opens the selected file at the line that changed, in
+whatever `$EDITOR` you already use — here nvim on `handler.go:41`, the hunk the
+session had just applied.
+
+![editor](docs/img/editor.png)
 
 ## Requirements
 
@@ -78,15 +92,31 @@ sudo mv verbose /usr/local/bin/
 
 ### With `go install`
 
-Requires Go 1.23+.
+Requires Go 1.25+ (the version in `go.mod`).
 
 ```bash
 go install github.com/fooxytv/verbose@latest
 ```
 
+**`go install` does not put the binary on your PATH.** It writes to `$GOBIN`, or
+`$(go env GOPATH)/bin` when that is unset — usually `~/go/bin`, which macOS and
+most Linux distributions do not search. The command succeeds and `verbose` is
+still "command not found". Add it once:
+
+```bash
+# zsh (the macOS default)
+echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+
+# bash
+echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+```
+
+Check it with `go env GOPATH` and `ls $(go env GOPATH)/bin`: if `verbose` is
+there, this is all that was missing.
+
 ### From source
 
-Requires Go 1.23+.
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/fooxytv/verbose.git
@@ -167,6 +197,7 @@ In the replay view:
 | `]` / `[` | Move the tree selection (with the sidebar open) |
 | `}` / `{` | Open / close a directory in the sidebar |
 | `d` | Open the selected file's diff (`d` or `Esc` closes) |
+| `e` | Open the selected file in `$EDITOR`, at the line that changed |
 | `c` | Continue the session: see its last output and reply |
 | `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
@@ -380,6 +411,37 @@ skipped rather than guessed at, because naming the wrong file as deleted is
 worse than naming none. For the same reason a file written through the shell is
 reported as *written* rather than created or edited — whether it existed
 beforehand is nowhere in the transcript.
+
+## Editing what you are reading
+
+`e` hands the file under the tree cursor to your own editor — in a replay, in
+the split, in the tree, or from an open diff. Without a tree beside it, `e` in a
+replay opens whatever file the current step touched.
+
+It opens **at the line that changed**, taken from the first hunk of the most
+recent change up to where the replay has reached, so you land on the work rather
+than on line 1. A new file has no hunks to read a line from, so that one opens
+at the top.
+
+The editor is whatever you already use: `$VISUAL`, then `$EDITOR`, then the
+first of `nvim`, `vim`, `vi` or `nano` found on your PATH (`notepad` on
+Windows). It goes where the CLI goes — a tmux split where there is one,
+otherwise a new terminal tab, otherwise taking over the terminal and handing it
+back when you quit. Playback stops first, so a replay is not several minutes
+further on when you return.
+
+**No editor is required to run verbose.** None of this is reached unless you
+press `e`, and nothing is added to the build. Anything your editor brings — an
+LSP, Copilot, your own bindings — comes with it, which is the point: verbose has
+no business growing an editor of its own.
+
+Two things it will not do. A file the session touched that has since been
+deleted is **not** opened, because an editor given a missing path silently
+creates an empty buffer that reads as lost work; the tree grafts those files
+back in and marks them `(gone)`, so the path on screen is not proof of a file on
+disk. And only vi-family editors are told which line to open — an editor that
+does not understand `+41` treats it as a second filename and opens a blank
+buffer called `+41`, so verbose would rather lose the jump than do that.
 
 ## Picking a session back up
 
