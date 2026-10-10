@@ -331,9 +331,9 @@ func TestTruncateVisibleKeepsStyledColumns(t *testing.T) {
 // Every row must fit the terminal at any width, label included.
 func TestSessionRowsFitTerminalWidth(t *testing.T) {
 	info := session.SessionInfo{
-		ProjectName: "powerbi-fabric-workspace-lifecycle",
-		ID:          "oc-ses_f8485cb45ffehIf3PUilR35b7x",
-		Title:       "Review WorkspaceLifecycle.Tests email specificity across the whole solution",
+		ProjectName: "notification-pipeline-orchestration",
+		ID:          "oc-ses_k3m9q2x7v4b8n1z6c5t0r9w2y8",
+		Title:       "Review the delivery worker tests for retry specificity across the whole service",
 		Source:      "opencode",
 		LinesAdded:  3736, LinesRemoved: 1384,
 	}
