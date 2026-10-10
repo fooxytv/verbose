@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -49,35 +50,36 @@ func TestShellRemovalsOnlyWhenCertain(t *testing.T) {
 }
 
 func TestBuildFileActivityClassifiesTouches(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{
 			{Type: EventToolUse, ToolName: "Read",
-				ToolInput: map[string]interface{}{"file_path": "/repo/a.go"}},
+				ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "a.go")}},
 			// A Write with an EMPTY patch is the only signal Claude Code gives
 			// that a file did not exist before.
 			{Type: EventToolUse, ToolName: "Write",
-				ToolInput: map[string]interface{}{"file_path": "/repo/new.go", "content": "x"},
-				Result:    &ToolResult{FilePath: "/repo/new.go"}},
+				ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "new.go"), "content": "x"},
+				Result:    &ToolResult{FilePath: filepath.Join(root, "new.go")}},
 			{Type: EventToolUse, ToolName: "Edit",
-				ToolInput: map[string]interface{}{"file_path": "/repo/a.go"},
-				Result: &ToolResult{FilePath: "/repo/a.go",
+				ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "a.go")},
+				Result: &ToolResult{FilePath: filepath.Join(root, "a.go"),
 					StructuredPatch: []PatchHunk{{Lines: []string{"+one", "+two", "-old"}}}}},
 			// A shell write: whether it existed before is not recorded.
 			{Type: EventToolUse, ToolName: "Bash",
-				ToolInput: map[string]interface{}{"command": "cat > /repo/sh.css <<'CSS'\nbody{}\nCSS"}},
+				ToolInput: map[string]interface{}{"command": "cat > " + filepath.Join(root, "sh.css") + " <<'CSS'\nbody{}\nCSS"}},
 			{Type: EventToolUse, ToolName: "Bash",
-				ToolInput: map[string]interface{}{"command": "rm /repo/old.go"}},
+				ToolInput: map[string]interface{}{"command": "rm " + filepath.Join(root, "old.go")}},
 		},
 	}
 
 	fa := BuildFileActivity(sess)
 
 	want := map[string]TouchKind{
-		"/repo/a.go":   TouchEdit,
-		"/repo/new.go": TouchCreate,
-		"/repo/sh.css": TouchWrite,
-		"/repo/old.go": TouchDelete,
+		filepath.Join(root, "a.go"):   TouchEdit,
+		filepath.Join(root, "new.go"): TouchCreate,
+		filepath.Join(root, "sh.css"): TouchWrite,
+		filepath.Join(root, "old.go"): TouchDelete,
 	}
 	for path, kind := range want {
 		a := fa[path]
@@ -92,16 +94,16 @@ func TestBuildFileActivityClassifiesTouches(t *testing.T) {
 	}
 
 	// Churn comes from the recorded diff, not the request.
-	if _, added, removed, _ := fa["/repo/a.go"].StateAt(len(sess.Events)); added != 2 || removed != 1 {
+	if _, added, removed, _ := fa[filepath.Join(root, "a.go")].StateAt(len(sess.Events)); added != 2 || removed != 1 {
 		t.Errorf("a.go churn = +%d -%d, want +2 -1", added, removed)
 	}
 	// Inferred touches must say so: a shell write and a deletion both are.
-	for _, p := range []string{"/repo/sh.css", "/repo/old.go"} {
+	for _, p := range []string{filepath.Join(root, "sh.css"), filepath.Join(root, "old.go")} {
 		if !fa[p].Touches[0].Inferred {
 			t.Errorf("%s should be marked inferred", p)
 		}
 	}
-	if fa["/repo/new.go"].Touches[0].Inferred {
+	if fa[filepath.Join(root, "new.go")].Touches[0].Inferred {
 		t.Error("a Write is recorded, not inferred")
 	}
 }
@@ -539,4 +541,19 @@ func TestParseBashEditDiffFromTranscript(t *testing.T) {
 		return
 	}
 	t.Fatal("no event carried the parsed bashEditDiff")
+}
+
+// testRoot is an absolute project directory for whatever platform is running
+// the test.
+//
+// "/repo" is not absolute on Windows — filepath.IsAbs wants a drive letter —
+// so absolutePath treats it as relative and joins it onto the session's cwd,
+// producing \repo\repo\a.go. Nothing then matches the paths the fixture asked
+// about, and the failure reads as the classifier being broken rather than the
+// fixture being unix-only.
+func testRoot() string {
+	if runtime.GOOS == "windows" {
+		return `C:\repo`
+	}
+	return "/repo"
 }
