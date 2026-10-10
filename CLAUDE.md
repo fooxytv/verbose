@@ -84,6 +84,13 @@ the local install.
 `go vet` and `go test` on linux, macOS and windows, plus a cross-compile of all
 six release targets.
 
+**Windows tests run but do not gate.** The first run on `windows-latest` failed
+21 pre-existing tests — CI had never run there before, so the breakage was
+invisible behind a cross-compile that passes. One of them is a real runtime bug
+(`delete.go` removes a file it still has open, which POSIX allows and Windows
+does not), and `~/.Trash` has no Windows equivalent at all. Tracked in issue #2;
+the job is left in the matrix so the state stays visible.
+
 That last job exists because **a tag used to be the first time those targets
 were built**. goreleaser runs *after* the tag exists, so a target that does not
 compile cannot be fixed in place — it needs a whole new version number. The
