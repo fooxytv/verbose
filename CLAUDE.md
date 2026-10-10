@@ -4,6 +4,16 @@ A terminal UI for reading Claude Code and OpenCode session transcripts. Go,
 bubbletea, lipgloss. No CGo anywhere — `modernc.org/sqlite` for OpenCode's
 database, `chroma` for syntax highlighting.
 
+`AGENTS.md` is a symlink to this file, so Codex and anything else following the
+cross-tool convention reads the same document. Claude Code reads `CLAUDE.md`
+directly and only falls back to `AGENTS.md` when no CLAUDE.md exists, so one
+file serves both — edit this one.
+
+Longer notes that would bloat this file live in [docs/notes](docs/notes):
+the [OpenCode database schema](docs/notes/opencode-database.md), the
+[store and watcher traps](docs/notes/store-and-watcher.md), and
+[why the replay and tree are shaped as they are](docs/notes/replay-and-tree.md).
+
 ## Layout
 
 | Package | Holds |
