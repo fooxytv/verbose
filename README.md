@@ -6,6 +6,11 @@ and [OpenCode](https://opencode.ai) session transcripts.
 Verbose reads the session data both agents store locally and presents it in a single
 interactive, color-coded viewer with real-time updates.
 
+![verbose](docs/demo.gif)
+
+<sub>Recorded against a synthetic session — see
+[docs/demo.tape](docs/demo.tape).</sub>
+
 ## Features
 
 - Browse all Claude Code and OpenCode sessions across projects, side by side
@@ -24,6 +29,28 @@ interactive, color-coded viewer with real-time updates.
 - Filter by project name
 - Resume any session in a new tmux pane or terminal tab, with the right CLI for its source
 - Delete sessions from the machine, with a confirmation step
+
+## What it looks like
+
+**Every session across every project**, by what it is about rather than by id.
+`◦` marks a subagent run, `◈` an OpenCode session.
+
+![sessions](docs/img/sessions.png)
+
+**Replay** (`R`) plays a session back at reading speed, typing the code out as
+it was written, syntax highlighted.
+
+![replay](docs/img/replay.png)
+
+**The tree** (`T`) sits beside it and scrolls itself to whatever is being
+changed — new files green, changed orange, removed red, untouched dim.
+
+![tree](docs/img/tree-split.png)
+
+**Diffs** (`d`) open side by side for the file under the cursor, pairing each
+removed line against the one that replaced it.
+
+![diff](docs/img/diff.png)
 
 ## Requirements
 

@@ -11,7 +11,19 @@ builds:
       - amd64
       - arm64
     binary: verbose
+    # Without this every released binary reports "dev" from --version, which is
+    # how the published builds and the Makefile's installs drifted apart.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
 
 archives:
-  - format: zip
+  - formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

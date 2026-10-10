@@ -16,9 +16,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v4
+      # Read the version from go.mod rather than pinning it here: the pin said
+      # 1.23 while go.mod had moved to 1.25, which fails the build outright.
+      - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
 
       - uses: goreleaser/goreleaser-action@v6
         with:
