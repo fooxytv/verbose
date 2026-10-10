@@ -214,6 +214,12 @@ type ToolResult struct {
 	// Edit / Write — the real diff Claude Code recorded for the change
 	StructuredPatch []PatchHunk `json:"structuredPatch"`
 
+	// Bash — the diff Claude Code records for the files a shell command
+	// changed. A shell edit is not diffless after all: it is recorded here
+	// rather than in structuredPatch, and per file, because one command can
+	// change several at once.
+	BashEdit *BashEditDiff `json:"bashEditDiff"`
+
 	// Read
 	File *ReadFile `json:"file"`
 
@@ -230,9 +236,61 @@ type PatchHunk struct {
 	Lines    []string `json:"lines"`
 }
 
-// Churn counts the added and removed lines across all hunks.
+// BashEditDiff is what a shell command changed, as Claude Code recorded it.
+type BashEditDiff struct {
+	Files []ChangedFile `json:"files"`
+	// MoreFiles counts files changed beyond those listed.
+	MoreFiles int `json:"moreFiles"`
+}
+
+// ChangedFile is one file's diff.
+type ChangedFile struct {
+	FilePath string      `json:"filePath"`
+	Hunks    []PatchHunk `json:"hunks"`
+}
+
+// ChangedFiles is every file this result recorded a diff for, whichever field
+// Claude Code put it in.
+//
+// The edit tools record one file in structuredPatch, alongside filePath; a
+// shell command records however many it changed in bashEditDiff. Callers that
+// want "the diffs this operation produced" should ask here rather than reach
+// for one field, which is how 322 shell diffs — more than the 300 from the edit
+// tools — went unread.
+func (r *ToolResult) ChangedFiles() []ChangedFile {
+	if r == nil {
+		return nil
+	}
+	if len(r.StructuredPatch) > 0 {
+		return []ChangedFile{{FilePath: r.FilePath, Hunks: r.StructuredPatch}}
+	}
+	if r.BashEdit == nil {
+		return nil
+	}
+	// The field is present but empty on commands that changed nothing.
+	var out []ChangedFile
+	for _, f := range r.BashEdit.Files {
+		if len(f.Hunks) > 0 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// Churn counts the added and removed lines across every file this result
+// changed.
 func (r *ToolResult) Churn() (added, removed int) {
-	for _, h := range r.StructuredPatch {
+	for _, f := range r.ChangedFiles() {
+		a, d := hunkChurn(f.Hunks)
+		added += a
+		removed += d
+	}
+	return added, removed
+}
+
+// hunkChurn counts one file's added and removed lines.
+func hunkChurn(hunks []PatchHunk) (added, removed int) {
+	for _, h := range hunks {
 		for _, l := range h.Lines {
 			switch {
 			case strings.HasPrefix(l, "+"):

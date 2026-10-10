@@ -370,25 +370,29 @@ func commandOf(e session.Event) string {
 	return cmd
 }
 
-// patchOf is the diff an event actually recorded. The recorded patch is used
-// rather than the requested edit: they differ when the file moved underfoot.
+// patchOf is the diff an event actually recorded, across every file it changed.
+// The recorded patch is used rather than the requested edit: they differ when
+// the file moved underfoot, and a shell command records its diff in a different
+// field entirely.
 func patchOf(e session.Event) []session.PatchHunk {
-	if e.Result == nil {
-		return nil
-	}
-	return e.Result.StructuredPatch
+	return e.RecordedHunks()
 }
 
 // changeSummary is the churn headline that sits beside a diff. The path is
 // shortened against the session's directory: a full home-directory path is
 // wider than most terminals on its own.
 func changeSummary(e session.Event, cwd string) string {
-	if e.Result == nil {
+	files := e.Result.ChangedFiles()
+	if len(files) == 0 {
 		return ""
 	}
 	added, removed := e.Result.Churn()
-	return fmt.Sprintf("+%d -%d in %s", added, removed,
-		session.ShortPath(e.Result.FilePath, cwd))
+	if len(files) == 1 {
+		return fmt.Sprintf("+%d -%d in %s", added, removed,
+			session.ShortPath(files[0].FilePath, cwd))
+	}
+	// One shell command can change several files at once.
+	return fmt.Sprintf("+%d -%d across %d files", added, removed, len(files))
 }
 
 // TypedLength is how many characters of a step get typed out. It is the budget
@@ -667,7 +671,7 @@ func codeSteps(steps []session.ReplayStep, sess *session.Session) []session.Repl
 			continue
 		}
 		if st.EventIndex < len(sess.Events) &&
-			len(sess.Events[st.EventIndex].StructuredPatchOrNil()) > 0 {
+			len(sess.Events[st.EventIndex].RecordedHunks()) > 0 {
 			out = append(out, st)
 		}
 	}

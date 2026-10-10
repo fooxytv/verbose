@@ -106,6 +106,22 @@ func FileChanges(sess *Session, path string, upto int) []FileChange {
 				}
 			}
 
+			// A recorded diff for this file beats anything read out of the
+			// command text.
+			diffed := false
+			for _, f := range e.Result.ChangedFiles() {
+				if absolutePath(f.FilePath, sess.Info.CWD) != path {
+					continue
+				}
+				out = append(out, FileChange{
+					EventIndex: i, Kind: TouchEdit, Hunks: f.Hunks,
+				})
+				diffed = true
+			}
+			if diffed {
+				continue
+			}
+
 			target, body := shellHeredoc(cmd)
 			if body == "" || absolutePath(target, sess.Info.CWD) != path {
 				continue

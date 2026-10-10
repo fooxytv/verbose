@@ -183,12 +183,26 @@ func BuildFileActivity(sess *Session) map[string]*FileActivity {
 			if cmd == "" {
 				continue
 			}
-			// A shell write records no diff and no indication of whether the
-			// file already existed, so it is reported as neither created nor
-			// edited — just written, and marked inferred.
+
+			// A shell command that changed files records a real diff, per file.
+			// That is a recorded fact, not an inference, so it outranks
+			// anything read out of the command text.
+			diffed := make(map[string]bool)
+			for _, f := range e.Result.ChangedFiles() {
+				a, d := hunkChurn(f.Hunks)
+				add(f.FilePath, FileTouch{EventIndex: i, Kind: TouchEdit,
+					LinesAdded: a, LinesRemo: d})
+				diffed[absolutePath(f.FilePath, sess.Info.CWD)] = true
+			}
+
+			// Only fall back to the command text for a file the diff did not
+			// cover: whether it existed beforehand is not recorded there, so it
+			// is reported as neither created nor edited, just written.
 			if p, body := shellHeredoc(cmd); body != "" && plausiblePath(p) {
-				add(p, FileTouch{EventIndex: i, Kind: TouchWrite,
-					LinesAdded: strings.Count(body, "\n") + 1, Inferred: true})
+				if !diffed[absolutePath(p, sess.Info.CWD)] {
+					add(p, FileTouch{EventIndex: i, Kind: TouchWrite,
+						LinesAdded: strings.Count(body, "\n") + 1, Inferred: true})
+				}
 			}
 			for _, p := range shellRemovals(cmd) {
 				add(p, FileTouch{EventIndex: i, Kind: TouchDelete, Inferred: true})

@@ -185,11 +185,17 @@ little of it:
 | Where the code is | When |
 |---|---|
 | `structuredPatch` | An `Edit` to a file that already existed |
+| `bashEditDiff` | A **shell command** that changed files — a real diff, one per file, since one command can change several |
 | The `Write` tool's `content` input | A **new** file — Claude Code records an *empty* patch, since there is no "before" |
-| A shell heredoc body | The agent wrote the file through `Bash` — no patch is recorded at all |
+| A shell heredoc body | A shell write that recorded no diff |
 
 On one session those last two rows took the visible-code steps from 1 to 173.
 Machine-wide, from 6.4% of steps to 21.3%.
+
+`bashEditDiff` is the one most easily missed: a shell command **does** record a
+real diff, in a different field from the edit tools. Reading it took the steps
+carrying a usable diff from 411 to 746 — more recorded diffs came from the shell
+than from `Edit` and `Write` together.
 
 A heredoc piped to an interpreter (`python3 - <<'PY'`) is shown as code but
 labelled without a filename, because it writes no file — it is the script that
@@ -288,7 +294,7 @@ applies rather than appearing to have found nothing:
 |---|---|
 | An edit to an existing file | The recorded diff, side by side |
 | A **new** file | All of it as additions — there is no previous version |
-| Written through the shell | The whole body it was given, with no diff recorded |
+| Written through the shell | Its recorded diff where there is one, otherwise the whole body it was given |
 | **Removed** | An explanation only. Claude Code has no delete tool, so the removal is inferred from the command line and the contents were never kept |
 | Changed by **you**, outside Claude | The snippet the transcript keeps, which is all it keeps |
 

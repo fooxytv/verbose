@@ -370,7 +370,7 @@ func describeTool(e Event, cwd string) string {
 		return describeEdit(e, cwd)
 
 	case "Bash", "BashOutput":
-		return describeBash(e)
+		return describeBash(e, cwd)
 
 	case "Grep":
 		pat, _ := stringInput(e.ToolInput, "pattern")
@@ -426,13 +426,14 @@ func describeEdit(e Event, cwd string) string {
 	}
 	name := relPath(path, cwd)
 
-	if r == nil || len(r.StructuredPatch) == 0 {
+	hunks := e.RecordedHunks()
+	if r == nil || len(hunks) == 0 {
 		return fmt.Sprintf("Changed %s.", name)
 	}
 
 	added, removed := r.Churn()
 	out := fmt.Sprintf("Changed %s: %d line(s) added, %d removed, across %d hunk(s).",
-		name, added, removed, len(r.StructuredPatch))
+		name, added, removed, len(hunks))
 	if r.ReplaceAll {
 		out += " Every occurrence was replaced, not just the first."
 	}
@@ -444,9 +445,21 @@ func describeEdit(e Event, cwd string) string {
 
 // describeBash reports a command by what it printed. A non-empty stderr is not
 // itself a failure — plenty of tools report progress there.
-func describeBash(e Event) string {
+func describeBash(e Event, cwd string) string {
 	cmd, _ := stringInput(e.ToolInput, "command")
 	desc, _ := stringInput(e.ToolInput, "description")
+
+	// A command that changed files recorded a diff for each. Saying which, and
+	// by how much, beats describing the command that did it.
+	if files := e.Result.ChangedFiles(); len(files) > 0 {
+		added, removed := e.Result.Churn()
+		if len(files) == 1 {
+			return fmt.Sprintf("Changed %s through the shell: %d line(s) added, %d removed.",
+				relPath(files[0].FilePath, cwd), added, removed)
+		}
+		return fmt.Sprintf("Changed %d files through the shell: %d line(s) added, %d removed.",
+			len(files), added, removed)
+	}
 
 	// A command that carries a heredoc is really a file write. Saying what it
 	// wrote is more use than echoing the redirect that carried it.
@@ -617,7 +630,9 @@ func shellHeredoc(cmd string) (path, body string) {
 // when a usable diff exists, because a diff says more than a wall of content:
 // it shows what changed rather than what the file now contains.
 func stepCode(e Event) (path, code string) {
-	if e.Result != nil && len(e.Result.StructuredPatch) > 0 {
+	// Any recorded diff outranks the content: a diff says what changed, a
+	// content dump only says what the file now holds.
+	if e.Result != nil && len(e.Result.ChangedFiles()) > 0 {
 		return "", ""
 	}
 
@@ -638,10 +653,12 @@ func stepCode(e Event) (path, code string) {
 	return "", ""
 }
 
-// StructuredPatchOrNil is the diff an event recorded, if any.
-func (e Event) StructuredPatchOrNil() []PatchHunk {
-	if e.Result == nil {
-		return nil
+// RecordedHunks is every diff hunk an event recorded, across every file it
+// changed — from the edit tools or from a shell command.
+func (e Event) RecordedHunks() []PatchHunk {
+	var out []PatchHunk
+	for _, f := range e.Result.ChangedFiles() {
+		out = append(out, f.Hunks...)
 	}
-	return e.Result.StructuredPatch
+	return out
 }

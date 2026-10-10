@@ -882,20 +882,26 @@ func renderToolResult(e session.Event, width int) []string {
 		return append(lines, wrapLines(r.Raw, width-4, "  ")...)
 	}
 
-	// Edit / Write — show the diff Claude Code actually recorded, not the request.
-	if len(r.StructuredPatch) > 0 {
+	// Show the diff Claude Code actually recorded, not the request — from the
+	// edit tools or from a shell command, which records one per file changed.
+	if files := r.ChangedFiles(); len(files) > 0 {
 		added, removed := r.Churn()
-		if r.FilePath != "" {
-			lines = append(lines, "  "+dimStyle.Render("File: ")+toolUseStyle.Render(r.FilePath))
+		hunks := 0
+		for _, f := range files {
+			hunks += len(f.Hunks)
 		}
 		lines = append(lines, "  "+diffAddStyle.Render(fmt.Sprintf("+%d", added))+" "+
 			diffRemoveStyle.Render(fmt.Sprintf("-%d", removed))+
-			mutedStyle.Render(fmt.Sprintf("  across %d hunk(s)", len(r.StructuredPatch))))
+			mutedStyle.Render(fmt.Sprintf("  across %d hunk(s) in %d file(s)", hunks, len(files))))
 		if r.UserModified {
 			lines = append(lines, "  "+systemStyle.Render("(the file had been modified by you since the agent last read it)"))
 		}
-		lines = append(lines, "")
-		lines = append(lines, renderPatch(r.StructuredPatch, width)...)
+		for _, f := range files {
+			lines = append(lines, "")
+			lines = append(lines, "  "+dimStyle.Render("File: ")+toolUseStyle.Render(f.FilePath))
+			lines = append(lines, "")
+			lines = append(lines, renderPatch(f.Hunks, width)...)
+		}
 		return lines
 	}
 

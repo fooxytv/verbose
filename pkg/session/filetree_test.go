@@ -404,3 +404,133 @@ func TestShellRemovalsFindsRmOnItsOwnLine(t *testing.T) {
 		}
 	}
 }
+
+// A shell command that changes files records a real diff, one per file, in
+// bashEditDiff — a different field from the edit tools' structuredPatch. Not
+// reading it left 331 recorded diffs unseen, more than the 300 the edit tools
+// provided, and made shell edits look diffless when they were not.
+func TestChangedFilesUnifiesBothRecordings(t *testing.T) {
+	edit := &ToolResult{
+		FilePath:        "/repo/a.go",
+		StructuredPatch: []PatchHunk{{Lines: []string{"+one", "-two"}}},
+	}
+	got := edit.ChangedFiles()
+	if len(got) != 1 || got[0].FilePath != "/repo/a.go" || len(got[0].Hunks) != 1 {
+		t.Errorf("edit-tool result = %+v, want its one file", got)
+	}
+	if a, d := edit.Churn(); a != 1 || d != 1 {
+		t.Errorf("edit churn = +%d -%d, want +1 -1", a, d)
+	}
+
+	shell := &ToolResult{BashEdit: &BashEditDiff{Files: []ChangedFile{
+		{FilePath: "/repo/x.tf", Hunks: []PatchHunk{{Lines: []string{"+a", "+b"}}}},
+		{FilePath: "/repo/y.tf", Hunks: []PatchHunk{{Lines: []string{"-c"}}}},
+		// Present but empty: the command touched nothing here.
+		{FilePath: "/repo/z.tf"},
+	}}}
+	got = shell.ChangedFiles()
+	if len(got) != 2 {
+		t.Fatalf("shell result = %d files, want 2 (the empty one dropped)", len(got))
+	}
+	if a, d := shell.Churn(); a != 2 || d != 1 {
+		t.Errorf("shell churn = +%d -%d, want +2 -1 across both files", a, d)
+	}
+
+	// structuredPatch wins when both are somehow present.
+	both := &ToolResult{
+		FilePath:        "/repo/a.go",
+		StructuredPatch: []PatchHunk{{Lines: []string{"+one"}}},
+		BashEdit:        &BashEditDiff{Files: []ChangedFile{{FilePath: "/repo/other.go", Hunks: []PatchHunk{{Lines: []string{"+z"}}}}}},
+	}
+	if got := both.ChangedFiles(); len(got) != 1 || got[0].FilePath != "/repo/a.go" {
+		t.Errorf("with both set = %+v, want the structuredPatch file", got)
+	}
+
+	if got := (&ToolResult{}).ChangedFiles(); got != nil {
+		t.Errorf("empty result = %v, want nil", got)
+	}
+	var nilResult *ToolResult
+	if got := nilResult.ChangedFiles(); got != nil {
+		t.Errorf("nil result = %v, want nil", got)
+	}
+}
+
+// The recorded diff is a fact; the command text is a guess. The diff wins, and
+// the heredoc fallback must not record the same file twice.
+func TestShellDiffOutranksTheCommandText(t *testing.T) {
+	sess := &Session{
+		Info: SessionInfo{CWD: "/repo"},
+		Events: []Event{{
+			Type:      EventToolUse,
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": "cat > /repo/a.go <<'EOF'\nnew\nEOF"},
+			Result: &ToolResult{BashEdit: &BashEditDiff{Files: []ChangedFile{
+				{FilePath: "/repo/a.go", Hunks: []PatchHunk{{Lines: []string{"+new", "-old"}}}},
+				{FilePath: "/repo/b.go", Hunks: []PatchHunk{{Lines: []string{"+also"}}}},
+			}}},
+		}},
+	}
+
+	fa := BuildFileActivity(sess)
+	a := fa["/repo/a.go"]
+	if a == nil {
+		t.Fatal("the changed file is missing from activity")
+	}
+	if len(a.Touches) != 1 {
+		t.Errorf("a.go has %d touches, want 1: the heredoc must not record it again", len(a.Touches))
+	}
+	kind, added, removed, _ := a.StateAt(len(sess.Events))
+	if kind != TouchEdit || added != 1 || removed != 1 {
+		t.Errorf("a.go = %v +%d -%d, want an edit of +1 -1", kind, added, removed)
+	}
+	if a.Touches[0].Inferred {
+		t.Error("a recorded diff is not inferred")
+	}
+
+	// The second file the one command changed is tracked too.
+	if fa["/repo/b.go"] == nil {
+		t.Error("the other file the command changed is missing")
+	}
+
+	// And the diff is what the panel shows for it.
+	ch := FileChanges(sess, "/repo/a.go", -1)
+	if len(ch) != 1 || !ch[0].HasDiff() {
+		t.Errorf("FileChanges = %+v, want one change carrying the diff", ch)
+	}
+	if ch[0].Content != "" {
+		t.Error("with a diff available the content dump should not be used")
+	}
+}
+
+// The field has to survive a real transcript line.
+func TestParseBashEditDiffFromTranscript(t *testing.T) {
+	body := `{"type":"user","uuid":"u1","timestamp":"2026-01-01T10:00:00.000Z",` +
+		`"toolUseResult":{"stdout":"","stderr":"","interrupted":false,` +
+		`"bashEditDiff":{"files":[{"filePath":"/repo/a.tf","hunks":[{"oldStart":45,` +
+		`"oldLines":6,"newStart":45,"newLines":12,"lines":[" ctx","+added"]}]}],` +
+		`"moreFiles":0,"shared":true}},` +
+		`"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
+`
+	sess, err := ParseSessionFile(writeTranscript(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range sess.Events {
+		r := sess.Events[i].Result
+		if r == nil || r.BashEdit == nil {
+			continue
+		}
+		files := r.ChangedFiles()
+		if len(files) != 1 || files[0].FilePath != "/repo/a.tf" {
+			t.Fatalf("parsed files = %+v, want the one recorded file", files)
+		}
+		if h := files[0].Hunks[0]; h.OldStart != 45 || h.NewLines != 12 {
+			t.Errorf("hunk = %+v, want its line numbers preserved", h)
+		}
+		if a, d := r.Churn(); a != 1 || d != 0 {
+			t.Errorf("churn = +%d -%d, want +1 -0", a, d)
+		}
+		return
+	}
+	t.Fatal("no event carried the parsed bashEditDiff")
+}
