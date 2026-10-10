@@ -1,14 +1,16 @@
 package session
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestBuildReplaySkipsBookkeepingAndEmptyThinking(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{
 			{Type: EventUserPrompt, UserText: "add a health check"},
 			// Extended thinking is signed but never retained, so every thinking
@@ -20,7 +22,7 @@ func TestBuildReplaySkipsBookkeepingAndEmptyThinking(t *testing.T) {
 			{Type: EventSystem},
 			{Type: EventText, Text: "I'll add the endpoint first."},
 			{Type: EventToolUse, ToolName: "Write", ToolInput: map[string]interface{}{
-				"file_path": "/repo/health.go"}},
+				"file_path": filepath.Join(root, "health.go")}},
 		},
 	}
 
@@ -289,13 +291,15 @@ func TestStepCodeRecoversShellWrites(t *testing.T) {
 // A step that wrote a file is titled by the file, not by the command that
 // carried it — "Ran mkdir -p … && cat > app.js <<'EOF'" says much less.
 func TestBuildReplayTitlesShellWritesByFile(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{{
 			Type:     EventToolUse,
 			ToolName: "Bash",
 			ToolInput: map[string]interface{}{
-				"command": "mkdir -p /repo/src && cat > /repo/src/app.js <<'EOF'\nlet a\nEOF",
+				"command": "mkdir -p " + filepath.Join(root, "src") +
+					" && cat > " + filepath.Join(root, "src", "app.js") + " <<'EOF'\nlet a\nEOF",
 			},
 		}},
 	}
@@ -303,8 +307,9 @@ func TestBuildReplayTitlesShellWritesByFile(t *testing.T) {
 	if len(steps) != 1 {
 		t.Fatalf("got %d steps, want 1", len(steps))
 	}
-	if steps[0].Title != "Wrote src/app.js" {
-		t.Errorf("title = %q, want %q", steps[0].Title, "Wrote src/app.js")
+	wantTitle := "Wrote " + filepath.Join("src", "app.js")
+	if steps[0].Title != wantTitle {
+		t.Errorf("title = %q, want %q", steps[0].Title, wantTitle)
 	}
 	if steps[0].Code != "let a" {
 		t.Errorf("code = %q, want %q", steps[0].Code, "let a")

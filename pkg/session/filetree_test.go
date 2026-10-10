@@ -249,8 +249,9 @@ func TestScanTreeDescendsIntoSkippedDirWhenTouched(t *testing.T) {
 // no path. Without recovering those mentions the tree sits still through most of
 // a Bash-heavy session.
 func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{
 			{Type: EventToolUse, ToolName: "Bash", ToolInput: map[string]interface{}{
 				"command": "sed -n '1,80p' src/main.go"}},
@@ -266,14 +267,14 @@ func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
 	}
 
 	real := map[string]bool{
-		"/repo/src/main.go": true,
-		"/repo/src/a.go":    true,
-		"/repo/src/b.go":    true,
+		filepath.Join(root, "src", "main.go"): true,
+		filepath.Join(root, "src", "a.go"):    true,
+		filepath.Join(root, "src", "b.go"):    true,
 	}
 	activity := BuildFileActivity(sess)
 	AttachShellReads(activity, sess, func(p string) bool { return real[p] })
 
-	for _, p := range []string{"/repo/src/main.go", "/repo/src/a.go", "/repo/src/b.go"} {
+	for _, p := range []string{filepath.Join(root, "src", "main.go"), filepath.Join(root, "src", "a.go"), filepath.Join(root, "src", "b.go")} {
 		if activity[p] == nil {
 			t.Errorf("%s was mentioned by a command but not recorded", p)
 		}
@@ -285,7 +286,12 @@ func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
 	}
 
 	// The read is marked inferred, because a mention is not a tool call.
-	main := activity["/repo/src/main.go"]
+	main := activity[filepath.Join(root, "src", "main.go")]
+	// Fail rather than dereference nil: a panic here aborts the whole test
+	// binary, which is how three later failures stayed hidden.
+	if main == nil {
+		t.Fatal("main.go missing from activity")
+	}
 	if main.Touches[0].Kind != TouchRead || !main.Touches[0].Inferred {
 		t.Errorf("first touch = %v inferred=%v, want an inferred read",
 			main.Touches[0].Kind, main.Touches[0].Inferred)
@@ -466,21 +472,22 @@ func TestChangedFilesUnifiesBothRecordings(t *testing.T) {
 // The recorded diff is a fact; the command text is a guess. The diff wins, and
 // the heredoc fallback must not record the same file twice.
 func TestShellDiffOutranksTheCommandText(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{{
 			Type:      EventToolUse,
 			ToolName:  "Bash",
-			ToolInput: map[string]interface{}{"command": "cat > /repo/a.go <<'EOF'\nnew\nEOF"},
+			ToolInput: map[string]interface{}{"command": "cat > " + filepath.Join(root, "a.go") + " <<'EOF'\nnew\nEOF"},
 			Result: &ToolResult{BashEdit: &BashEditDiff{Files: []ChangedFile{
-				{FilePath: "/repo/a.go", Hunks: []PatchHunk{{Lines: []string{"+new", "-old"}}}},
-				{FilePath: "/repo/b.go", Hunks: []PatchHunk{{Lines: []string{"+also"}}}},
+				{FilePath: filepath.Join(root, "a.go"), Hunks: []PatchHunk{{Lines: []string{"+new", "-old"}}}},
+				{FilePath: filepath.Join(root, "b.go"), Hunks: []PatchHunk{{Lines: []string{"+also"}}}},
 			}}},
 		}},
 	}
 
 	fa := BuildFileActivity(sess)
-	a := fa["/repo/a.go"]
+	a := fa[filepath.Join(root, "a.go")]
 	if a == nil {
 		t.Fatal("the changed file is missing from activity")
 	}
@@ -496,12 +503,12 @@ func TestShellDiffOutranksTheCommandText(t *testing.T) {
 	}
 
 	// The second file the one command changed is tracked too.
-	if fa["/repo/b.go"] == nil {
+	if fa[filepath.Join(root, "b.go")] == nil {
 		t.Error("the other file the command changed is missing")
 	}
 
 	// And the diff is what the panel shows for it.
-	ch := FileChanges(sess, "/repo/a.go", -1)
+	ch := FileChanges(sess, filepath.Join(root, "a.go"), -1)
 	if len(ch) != 1 || !ch[0].HasDiff() {
 		t.Errorf("FileChanges = %+v, want one change carrying the diff", ch)
 	}
