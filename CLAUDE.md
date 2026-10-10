@@ -35,13 +35,36 @@ make install          # builds with the ldflag into ~/go/bin/verbose
 verbose --version     # must match the Makefile
 ```
 
-To ship a change:
+### Trunk-based: main is protected
+
+**`main` cannot be pushed to directly.** Every change goes through a short-lived
+branch and a pull request, and CI must pass before it can merge. Reviews from
+someone else are not required — this is a one-person repository, so you approve
+and merge your own — but the checks are not optional.
+
+```bash
+git switch -c fix/thing          # short-lived, one change
+git push -u origin fix/thing
+gh pr create --fill
+gh pr merge --squash --auto      # lands itself once CI is green
+```
+
+Branches are meant to be hours old, not weeks. The point of the trunk is that
+everything is merged into it continuously; a branch that lives long enough to
+need a rebase has already lost most of the benefit.
+
+`gh` must be acting as the **`fooxytv`** account. Two accounts are configured on
+this machine and the other one is not a collaborator, so `gh pr create` fails
+with `must be a collaborator` — a confusing error for what is only the wrong
+active account. `gh auth switch --hostname github.com --user fooxytv` fixes it.
+
+### Shipping a release
 
 1. Bump `VERSION` in the `Makefile`.
 2. `gofmt -l .` (silent), `go vet ./...`, `go test ./...`.
 3. `make install` and check `verbose --version`.
-4. Commit.
-5. `git tag vX.Y.Z && git push origin vX.Y.Z`.
+4. Branch, PR, merge to `main` as above.
+5. `git tag vX.Y.Z && git push origin vX.Y.Z` — from `main`, after the merge.
 
 The tag is what publishes. `.github/workflows/release.yml` fires on `v*`, runs
 goreleaser, and builds linux/windows/darwin × amd64/arm64. The workflow takes
@@ -54,6 +77,17 @@ repository path match.
 
 **Version without a tag is not released.** Bumping the Makefile only changes
 the local install.
+
+### What CI checks
+
+`.github/workflows/ci.yml` runs on every PR and every push to `main`: `gofmt`,
+`go vet` and `go test` on linux, macOS and windows, plus a cross-compile of all
+six release targets.
+
+That last job exists because **a tag used to be the first time those targets
+were built**. goreleaser runs *after* the tag exists, so a target that does not
+compile cannot be fixed in place — it needs a whole new version number. The
+cross-compile job moves that failure to the PR, where it costs nothing.
 
 ## Transcript format — facts worth not re-deriving
 
