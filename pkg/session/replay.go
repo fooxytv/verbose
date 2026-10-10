@@ -72,6 +72,15 @@ type ReplayStep struct {
 	Code     string
 	CodePath string
 
+	// FilePath is the file this step touched, absolute, however the transcript
+	// recorded it — a diff, an edit tool's input or a shell heredoc.
+	//
+	// CodePath cannot stand in for it. CodePath is display text: relPath
+	// abbreviates a path outside the project to "…/dir/file", and a step that
+	// recorded a real diff has no CodePath at all. Anything acting on the file
+	// rather than printing it needs this one.
+	FilePath string
+
 	// Explanation is the teaching text for this step. It is empty until
 	// something generates it; the reasoning behind a step is not recorded in
 	// the transcript, so it cannot be derived here.
@@ -99,6 +108,7 @@ func BuildReplay(sess *Session) []ReplayStep {
 		if code == "" {
 			codePath = ""
 		}
+		file := stepFile(e, codePath, sess.Info.CWD)
 		title := replayTitle(e, sess.Info.CWD)
 		// "Ran mkdir -p … && cat > app.js <<'EOF'" says less than "Wrote
 		// app.js", and the command is shown underneath anyway.
@@ -112,6 +122,7 @@ func BuildReplay(sess *Session) []ReplayStep {
 			Detail:      DescribeEvent(e, sess.Info.CWD),
 			Code:        code,
 			CodePath:    codeLabel(codePath, sess.Info.CWD),
+			FilePath:    file,
 			IsSidechain: e.IsSidechain,
 		})
 	}
@@ -651,6 +662,29 @@ func stepCode(e Event) (path, code string) {
 		return shellHeredoc(cmd)
 	}
 	return "", ""
+}
+
+// stepFile is the file a step touched, resolved against the session directory.
+//
+// The transcript records it in three different places depending on how the file
+// was written, and a reader who wants to open it does not care which: a diff
+// names the file it patched, an edit tool names it in the input, and a shell
+// heredoc only yields one by parsing the command. Checked in that order,
+// strongest evidence first.
+func stepFile(e Event, codePath, cwd string) string {
+	if files := e.Result.ChangedFiles(); len(files) > 0 && files[0].FilePath != "" {
+		return absolutePath(files[0].FilePath, cwd)
+	}
+	if e.FilePath != "" {
+		return absolutePath(e.FilePath, cwd)
+	}
+	if p, ok := stringInput(e.ToolInput, "file_path"); ok && p != "" {
+		return absolutePath(p, cwd)
+	}
+	if codePath != "" {
+		return absolutePath(codePath, cwd)
+	}
+	return ""
 }
 
 // RecordedHunks is every diff hunk an event recorded, across every file it

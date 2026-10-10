@@ -857,8 +857,10 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 	// With the tree beside the replay, ctrl and an arrow drives the tree. The
 	// plain arrows stay with the replay, which is what they do without the
 	// sidebar, so nothing changes meaning when it opens.
-	if m.treeSplit && m.handleTreeSidebarKey(key, m.height-1) {
-		return m, nil
+	if m.treeSplit {
+		if cmd, handled := m.handleTreeSidebarKey(key, m.height-1); handled {
+			return m, cmd
+		}
 	}
 
 	// Space is normalised to "enter" for selection elsewhere; here it is the
@@ -916,6 +918,11 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 	case "left", "h":
 		m.replayStep(-1)
 		return m, nil
+
+	case "e", "E":
+		// With the tree open the sidebar handler has already taken this and the
+		// cursor decides the file; without it, the step does.
+		return m, m.editCurrentStep()
 
 	case "down", "j":
 		m.replayTakeOver()

@@ -437,9 +437,15 @@ func (m Model) View() string {
 			if m.treeFollow {
 				followLabel = "following ●"
 			}
+			// e sits with the other keys that act on the file under the tree
+			// cursor. Without the sidebar it acts on the step's own file,
+			// which is a lesser control, so it goes further down instead —
+			// the footer drops from the end, and "go to step" is needed more
+			// often than an editor.
 			helpKeys = append(helpKeys,
 				helpKey{"[/]", "tree"},
 				helpKey{"d", "diff"},
+				helpKey{"e", "edit"},
 				helpKey{"{/}", "fold"},
 				helpKey{"ctrl+f", followLabel},
 			)
@@ -448,6 +454,11 @@ func (m Model) View() string {
 			helpKey{"tab", codeLabel},
 			helpKey{"+/-", "speed"},
 			helpKey{"/", "go to step"},
+		)
+		if !m.treeSplit {
+			helpKeys = append(helpKeys, helpKey{"e", "edit"})
+		}
+		helpKeys = append(helpKeys,
 			helpKey{"↑/↓", "scroll"},
 			helpKey{"0", "restart"},
 			helpKey{"f", liveLabel},
@@ -474,6 +485,7 @@ func (m Model) View() string {
 		helpKeys = []helpKey{
 			{"↑/↓", "move"},
 			{"d", "diff"},
+			{"e", "edit"},
 			{"→/←", "open/close"},
 			{"space", "play"},
 			{"tab", changedLabel},
@@ -512,6 +524,7 @@ func (m Model) View() string {
 		helpKeys = []helpKey{
 			{"↑/↓", "scroll"},
 			{"[/]", "next file"},
+			{"e", "edit"},
 			{"d/esc", "close"},
 			{"g/G", "top/end"},
 			{"q", "quit"},

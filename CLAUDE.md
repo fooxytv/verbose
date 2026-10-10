@@ -35,13 +35,36 @@ make install          # builds with the ldflag into ~/go/bin/verbose
 verbose --version     # must match the Makefile
 ```
 
-To ship a change:
+### Trunk-based: main is protected
+
+**`main` cannot be pushed to directly.** Every change goes through a short-lived
+branch and a pull request, and CI must pass before it can merge. Reviews from
+someone else are not required — this is a one-person repository, so you approve
+and merge your own — but the checks are not optional.
+
+```bash
+git switch -c fix/thing          # short-lived, one change
+git push -u origin fix/thing
+gh pr create --fill
+gh pr merge --squash --auto      # lands itself once CI is green
+```
+
+Branches are meant to be hours old, not weeks. The point of the trunk is that
+everything is merged into it continuously; a branch that lives long enough to
+need a rebase has already lost most of the benefit.
+
+`gh` must be acting as the **`fooxytv`** account. Two accounts are configured on
+this machine and the other one is not a collaborator, so `gh pr create` fails
+with `must be a collaborator` — a confusing error for what is only the wrong
+active account. `gh auth switch --hostname github.com --user fooxytv` fixes it.
+
+### Shipping a release
 
 1. Bump `VERSION` in the `Makefile`.
 2. `gofmt -l .` (silent), `go vet ./...`, `go test ./...`.
 3. `make install` and check `verbose --version`.
-4. Commit.
-5. `git tag vX.Y.Z && git push origin vX.Y.Z`.
+4. Branch, PR, merge to `main` as above.
+5. `git tag vX.Y.Z && git push origin vX.Y.Z` — from `main`, after the merge.
 
 The tag is what publishes. `.github/workflows/release.yml` fires on `v*`, runs
 goreleaser, and builds linux/windows/darwin × amd64/arm64. The workflow takes
@@ -54,6 +77,48 @@ repository path match.
 
 **Version without a tag is not released.** Bumping the Makefile only changes
 the local install.
+
+### What CI checks
+
+`.github/workflows/ci.yml` runs on every PR and every push to `main`: `gofmt`,
+`go vet` and `go test` on linux, macOS and windows, plus a cross-compile of all
+six release targets.
+
+**Windows is tested. Six things cost a CI round each:**
+
+- **A panic truncates the whole package.** A nil dereference in one test
+  aborted the `pkg/session` binary, so every test after it never ran and the
+  failure list was never complete — four rounds of "fixed it" were each reading
+  a prefix. Assert and `t.Fatal`; never dereference a map lookup in a test.
+- **`$HOME` does not redirect the home directory.** Everything resolves home
+  through `os.UserHomeDir()`, which reads `%USERPROFILE%` on Windows. A test
+  that sets only `HOME` isolates nothing — it reads the real profile. Set both;
+  `isolatedHome` and `deleteFixture` do.
+- **A file cannot be removed while a handle is open.** `copyThenRemove` closes
+  the source explicitly before `os.Remove`; a `defer` alone runs too late and
+  left the original in place with a copy already in the trash. This one was a
+  real bug, not a test problem — deleting a session could not work.
+- **`/repo` is not an absolute path.** `filepath.IsAbs` wants a drive letter,
+  so a unix-style root in a fixture gets joined onto the cwd and nothing
+  matches. Build test paths from `testRoot()`. The production code is fine — a
+  real Windows transcript records `C:\...`.
+- **Path output carries the platform's separator.** `filepath.Join`, `Clean`
+  and `Rel` all return `\` here, so an expectation with a literal `/` fails.
+  Build the expectation the same way the code does. `Dir` and `Base` are safe:
+  they accept `/` on Windows.
+- **Short paths are full of tildes** (`C:\Users\RUNNER~1\...`). A tilde only
+  expands at the start of a word, so `shellRemovals` rejects a leading one and
+  nothing else. Treating them all as expansions meant no deletion was ever
+  recognised — on Windows, and on `rm /tmp/build~2/old.go` anywhere.
+
+Two things have no Windows equivalent and are skipped rather than faked: a
+`#!/bin/sh` CLI stub, and the Recycle Bin. The trash is
+`%USERPROFILE%\.local\share\Trash\files`, which the README now says.
+
+That last job exists because **a tag used to be the first time those targets
+were built**. goreleaser runs *after* the tag exists, so a target that does not
+compile cannot be fixed in place — it needs a whole new version number. The
+cross-compile job moves that failure to the PR, where it costs nothing.
 
 ## Transcript format — facts worth not re-deriving
 
@@ -116,6 +181,27 @@ Application Windows and Spaces, so the terminal never sees them — a binding
 there is silently dead. Prefer bare characters (`[` `]` `{` `}`); they have no
 modifier to intercept. Verifying that bubbletea *decodes* a sequence is not
 verifying that anything *sends* it.
+
+## Opening an editor
+
+`e` hands the file under the cursor to `$VISUAL`, then `$EDITOR`, then the first
+of `nvim`/`vim`/`vi`/`nano` on `PATH` (`notepad` on Windows). **An editor is
+never a build or install dependency** — nothing in `editor.go` is reached until
+the key is pressed.
+
+- **Only vi-family editors get `+N`.** An editor that does not understand the
+  flag treats it as a second filename and opens an empty buffer called `+12`.
+  `lineArg` returns nothing for anything not on its list; losing the jump beats
+  a bogus buffer.
+- **`$EDITOR` may carry arguments** (`code -w`), so it is split into fields, not
+  taken whole as a binary name.
+- **Check the file is still on disk.** The tree deliberately grafts back deleted
+  files, so a path on screen is not proof of a file.
+- **Stop playback and bump `replayGen`** before launching, or the ticks
+  scheduled during the edit all arrive at once on return.
+- `ReplayStep.CodePath` is display text and cannot be turned back into a path:
+  `relPath` abbreviates to `…/dir/file`, and a step with a real diff has none at
+  all. `ReplayStep.FilePath` is the absolute one.
 
 ## Testing
 

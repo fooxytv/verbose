@@ -15,8 +15,18 @@ Set Theme "GitHub Dark"
 Set TypingSpeed 60ms
 
 # Point verbose at the synthetic tree, off camera.
+#
+# TMUX and ITERM_SESSION_ID have to go with it. vhs inherits the environment it
+# was launched from, and `e` asks launchInTerminal where to put the editor: with
+# either of those set it opens a pane in the REAL terminal running the
+# recording, so the GIF shows a key that appears to do nothing. Unset, it falls
+# through to in-place and nvim takes over the recorded screen, which is what
+# should be on camera.
+#
+# HOME is already redirected, so nvim finds the throwaway config under
+# /tmp/devdemo and never loads a personal one.
 Hide
-Type "export HOME=/tmp/devdemo PS1='$ ' && clear"
+Type "export HOME=/tmp/devdemo EDITOR=nvim PS1='$ ' && unset TMUX ITERM_SESSION_ID TERM_PROGRAM && clear"
 Enter
 Sleep 500ms
 Show
@@ -61,7 +71,22 @@ Sleep 3.5s
 Screenshot docs/img/diff.png
 Sleep 2.5s
 
+# Close the diff, move up to handler.go and open it in $EDITOR. That file is
+# the one the session actually patched, so the editor opens on the change at
+# line 41 rather than at the top.
 Escape
-Sleep 800ms
+Sleep 1s
+Type "["
+Sleep 1.2s
+Type "e"
+Sleep 3.5s
+Screenshot docs/img/editor.png
+Sleep 2s
+
+# Back to verbose, exactly where it was left.
+Type ":q"
+Enter
+Sleep 2.5s
+
 Type "q"
 Sleep 1s

@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -24,6 +25,12 @@ func TestShellRemovalsOnlyWhenCertain(t *testing.T) {
 		{"variable", "rm $TMP/x", nil},
 		{"substitution", "rm `ls`", nil},
 		{"home", "rm ~/thing", nil},
+		// ...but only at the start of a word. A tilde inside a path is an
+		// ordinary character, and Windows 8.3 short paths are built from them,
+		// so rejecting the lot meant no deletion was ever recognised there.
+		{"tilde inside a path", `rm C:\Users\RUNNER~1\Temp\gone.txt`,
+			[]string{`C:\Users\RUNNER~1\Temp\gone.txt`}},
+		{"tilde inside a unix path", "rm /tmp/build~2/old.go", []string{"/tmp/build~2/old.go"}},
 		{"not rm at all", "rmdir empty", nil},
 		{"rm inside a word", "npm run rm-stuff", nil},
 	}
@@ -43,35 +50,36 @@ func TestShellRemovalsOnlyWhenCertain(t *testing.T) {
 }
 
 func TestBuildFileActivityClassifiesTouches(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{
 			{Type: EventToolUse, ToolName: "Read",
-				ToolInput: map[string]interface{}{"file_path": "/repo/a.go"}},
+				ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "a.go")}},
 			// A Write with an EMPTY patch is the only signal Claude Code gives
 			// that a file did not exist before.
 			{Type: EventToolUse, ToolName: "Write",
-				ToolInput: map[string]interface{}{"file_path": "/repo/new.go", "content": "x"},
-				Result:    &ToolResult{FilePath: "/repo/new.go"}},
+				ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "new.go"), "content": "x"},
+				Result:    &ToolResult{FilePath: filepath.Join(root, "new.go")}},
 			{Type: EventToolUse, ToolName: "Edit",
-				ToolInput: map[string]interface{}{"file_path": "/repo/a.go"},
-				Result: &ToolResult{FilePath: "/repo/a.go",
+				ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "a.go")},
+				Result: &ToolResult{FilePath: filepath.Join(root, "a.go"),
 					StructuredPatch: []PatchHunk{{Lines: []string{"+one", "+two", "-old"}}}}},
 			// A shell write: whether it existed before is not recorded.
 			{Type: EventToolUse, ToolName: "Bash",
-				ToolInput: map[string]interface{}{"command": "cat > /repo/sh.css <<'CSS'\nbody{}\nCSS"}},
+				ToolInput: map[string]interface{}{"command": "cat > " + filepath.Join(root, "sh.css") + " <<'CSS'\nbody{}\nCSS"}},
 			{Type: EventToolUse, ToolName: "Bash",
-				ToolInput: map[string]interface{}{"command": "rm /repo/old.go"}},
+				ToolInput: map[string]interface{}{"command": "rm " + filepath.Join(root, "old.go")}},
 		},
 	}
 
 	fa := BuildFileActivity(sess)
 
 	want := map[string]TouchKind{
-		"/repo/a.go":   TouchEdit,
-		"/repo/new.go": TouchCreate,
-		"/repo/sh.css": TouchWrite,
-		"/repo/old.go": TouchDelete,
+		filepath.Join(root, "a.go"):   TouchEdit,
+		filepath.Join(root, "new.go"): TouchCreate,
+		filepath.Join(root, "sh.css"): TouchWrite,
+		filepath.Join(root, "old.go"): TouchDelete,
 	}
 	for path, kind := range want {
 		a := fa[path]
@@ -86,16 +94,16 @@ func TestBuildFileActivityClassifiesTouches(t *testing.T) {
 	}
 
 	// Churn comes from the recorded diff, not the request.
-	if _, added, removed, _ := fa["/repo/a.go"].StateAt(len(sess.Events)); added != 2 || removed != 1 {
+	if _, added, removed, _ := fa[filepath.Join(root, "a.go")].StateAt(len(sess.Events)); added != 2 || removed != 1 {
 		t.Errorf("a.go churn = +%d -%d, want +2 -1", added, removed)
 	}
 	// Inferred touches must say so: a shell write and a deletion both are.
-	for _, p := range []string{"/repo/sh.css", "/repo/old.go"} {
+	for _, p := range []string{filepath.Join(root, "sh.css"), filepath.Join(root, "old.go")} {
 		if !fa[p].Touches[0].Inferred {
 			t.Errorf("%s should be marked inferred", p)
 		}
 	}
-	if fa["/repo/new.go"].Touches[0].Inferred {
+	if fa[filepath.Join(root, "new.go")].Touches[0].Inferred {
 		t.Error("a Write is recorded, not inferred")
 	}
 }
@@ -241,8 +249,9 @@ func TestScanTreeDescendsIntoSkippedDirWhenTouched(t *testing.T) {
 // no path. Without recovering those mentions the tree sits still through most of
 // a Bash-heavy session.
 func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{
 			{Type: EventToolUse, ToolName: "Bash", ToolInput: map[string]interface{}{
 				"command": "sed -n '1,80p' src/main.go"}},
@@ -258,14 +267,14 @@ func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
 	}
 
 	real := map[string]bool{
-		"/repo/src/main.go": true,
-		"/repo/src/a.go":    true,
-		"/repo/src/b.go":    true,
+		filepath.Join(root, "src", "main.go"): true,
+		filepath.Join(root, "src", "a.go"):    true,
+		filepath.Join(root, "src", "b.go"):    true,
 	}
 	activity := BuildFileActivity(sess)
 	AttachShellReads(activity, sess, func(p string) bool { return real[p] })
 
-	for _, p := range []string{"/repo/src/main.go", "/repo/src/a.go", "/repo/src/b.go"} {
+	for _, p := range []string{filepath.Join(root, "src", "main.go"), filepath.Join(root, "src", "a.go"), filepath.Join(root, "src", "b.go")} {
 		if activity[p] == nil {
 			t.Errorf("%s was mentioned by a command but not recorded", p)
 		}
@@ -277,7 +286,12 @@ func TestAttachShellReadsRecoversMentionedFiles(t *testing.T) {
 	}
 
 	// The read is marked inferred, because a mention is not a tool call.
-	main := activity["/repo/src/main.go"]
+	main := activity[filepath.Join(root, "src", "main.go")]
+	// Fail rather than dereference nil: a panic here aborts the whole test
+	// binary, which is how three later failures stayed hidden.
+	if main == nil {
+		t.Fatal("main.go missing from activity")
+	}
 	if main.Touches[0].Kind != TouchRead || !main.Touches[0].Inferred {
 		t.Errorf("first touch = %v inferred=%v, want an inferred read",
 			main.Touches[0].Kind, main.Touches[0].Inferred)
@@ -458,21 +472,22 @@ func TestChangedFilesUnifiesBothRecordings(t *testing.T) {
 // The recorded diff is a fact; the command text is a guess. The diff wins, and
 // the heredoc fallback must not record the same file twice.
 func TestShellDiffOutranksTheCommandText(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{{
 			Type:      EventToolUse,
 			ToolName:  "Bash",
-			ToolInput: map[string]interface{}{"command": "cat > /repo/a.go <<'EOF'\nnew\nEOF"},
+			ToolInput: map[string]interface{}{"command": "cat > " + filepath.Join(root, "a.go") + " <<'EOF'\nnew\nEOF"},
 			Result: &ToolResult{BashEdit: &BashEditDiff{Files: []ChangedFile{
-				{FilePath: "/repo/a.go", Hunks: []PatchHunk{{Lines: []string{"+new", "-old"}}}},
-				{FilePath: "/repo/b.go", Hunks: []PatchHunk{{Lines: []string{"+also"}}}},
+				{FilePath: filepath.Join(root, "a.go"), Hunks: []PatchHunk{{Lines: []string{"+new", "-old"}}}},
+				{FilePath: filepath.Join(root, "b.go"), Hunks: []PatchHunk{{Lines: []string{"+also"}}}},
 			}}},
 		}},
 	}
 
 	fa := BuildFileActivity(sess)
-	a := fa["/repo/a.go"]
+	a := fa[filepath.Join(root, "a.go")]
 	if a == nil {
 		t.Fatal("the changed file is missing from activity")
 	}
@@ -488,12 +503,12 @@ func TestShellDiffOutranksTheCommandText(t *testing.T) {
 	}
 
 	// The second file the one command changed is tracked too.
-	if fa["/repo/b.go"] == nil {
+	if fa[filepath.Join(root, "b.go")] == nil {
 		t.Error("the other file the command changed is missing")
 	}
 
 	// And the diff is what the panel shows for it.
-	ch := FileChanges(sess, "/repo/a.go", -1)
+	ch := FileChanges(sess, filepath.Join(root, "a.go"), -1)
 	if len(ch) != 1 || !ch[0].HasDiff() {
 		t.Errorf("FileChanges = %+v, want one change carrying the diff", ch)
 	}
@@ -533,4 +548,19 @@ func TestParseBashEditDiffFromTranscript(t *testing.T) {
 		return
 	}
 	t.Fatal("no event carried the parsed bashEditDiff")
+}
+
+// testRoot is an absolute project directory for whatever platform is running
+// the test.
+//
+// "/repo" is not absolute on Windows — filepath.IsAbs wants a drive letter —
+// so absolutePath treats it as relative and joins it onto the session's cwd,
+// producing \repo\repo\a.go. Nothing then matches the paths the fixture asked
+// about, and the failure reads as the classifier being broken rather than the
+// fixture being unix-only.
+func testRoot() string {
+	if runtime.GOOS == "windows" {
+		return `C:\repo`
+	}
+	return "/repo"
 }

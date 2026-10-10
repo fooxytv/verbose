@@ -288,13 +288,216 @@ with open(os.path.join(sub, f"agent-{AGENT}.meta.json"), "w") as f:
                "toolUseId": "t8", "spawnDepth": 1}, f)
 
 # A real project directory, so the tree has something to show.
-for rel in ["go.mod", "README.md", "cmd/server/main.go", "internal/http/handler.go",
-            "internal/http/handler_test.go", "internal/http/router.go",
-            "internal/store/store.go", "internal/store/store_test.go",
-            "internal/store/memory.go", "docs/api.md"]:
-    p = os.path.join(CWD, rel)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    open(p, "w").write("// demo\n")
+#
+# The files carry plausible content rather than a one-line stub, because `e`
+# opens one in an editor on camera. handler.go in particular must be long
+# enough to reach line 41: that is where the session's diff hunk starts, so it
+# is where the editor is asked to open, and a four-line file would land at the
+# top and quietly make the jump look broken.
+HANDLER_GO = """package http
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"notestore/internal/store"
+)
+
+// Server serves the notes API over an injected store.
+type Server struct {
+	store store.Store
+	mux   *chi.Mux
+}
+
+// NewServer wires the routes onto a fresh router.
+func NewServer(s store.Store) *Server {
+	srv := &Server{store: s, mux: chi.NewRouter()}
+	srv.routes()
+	return srv
+}
+
+func (s *Server) routes() {
+	s.mux.Get("/notes/{id}", s.getNote)
+	s.mux.Post("/notes", s.createNote)
+	s.mux.Get("/healthz", s.healthz)
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mux.ServeHTTP(w, r)
+}
+
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+// getNote returns one note, or 404 when the store has never heard of it.
+func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
+	note, err := s.store.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "note not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, note)
+}
+
+func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
+	var note store.Note
+	if err := json.NewDecoder(r.Body).Decode(&note); err != nil {
+		http.Error(w, "malformed body", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.Put(r.Context(), note); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, note)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+"""
+
+# The hunk in the transcript starts at line 41, and `e` opens there. If the
+# file is ever reworded this assertion is what stops the demo from silently
+# opening on the wrong function.
+_lines = HANDLER_GO.split("\n")
+assert _lines[40].strip().startswith("func (s *Server) getNote"), \
+    "handler.go line 41 is %r, but the demo diff hunk starts there" % _lines[40]
+
+HANDLER_TEST_GO = """package http
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestGetMissingNoteIs404(t *testing.T) {
+	srv := newTestServer(t)
+	res := srv.get("/notes/does-not-exist")
+	if res.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", res.Code)
+	}
+}
+"""
+
+STORE_GO = """package store
+
+import (
+	"context"
+	"errors"
+)
+
+// ErrNotFound is returned when a note id is not in the store.
+var ErrNotFound = errors.New("note not found")
+
+// Note is one stored note.
+type Note struct {
+	ID   string `json:"id"`
+	Body string `json:"body"`
+}
+
+// Store is the persistence boundary the HTTP layer depends on.
+type Store interface {
+	Get(ctx context.Context, id string) (Note, error)
+	Put(ctx context.Context, n Note) error
+}
+"""
+
+PROJECT_FILES = {
+    "go.mod": "module notestore\n\ngo 1.25\n",
+    "README.md": "# notestore\n\nA small notes API used to demonstrate verbose.\n",
+    "cmd/server/main.go": """package main
+
+import (
+	"log"
+	"net/http"
+
+	"notestore/internal/http"
+	"notestore/internal/store"
+)
+
+func main() {
+	srv := http.NewServer(store.NewMemory())
+	log.Fatal(http.ListenAndServe(":8080", srv))
+}
+""",
+    "internal/http/handler.go": HANDLER_GO,
+    "internal/http/handler_test.go": HANDLER_TEST_GO,
+    "internal/http/router.go": "package http\n\n// Routing lives on the Server; this file is a placeholder.\n",
+    "internal/store/store.go": STORE_GO,
+    "internal/store/store_test.go": "package store\n\nimport \"testing\"\n\nfunc TestNothingYet(t *testing.T) {}\n",
+    "internal/store/memory.go": """package store
+
+import (
+	"context"
+	"sync"
+)
+
+type memory struct {
+	mu    sync.RWMutex
+	notes map[string]Note
+}
+
+// NewMemory returns an in-memory Store, for tests and local runs.
+func NewMemory() Store {
+	return &memory{notes: map[string]Note{}}
+}
+
+func (m *memory) Get(ctx context.Context, id string) (Note, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n, ok := m.notes[id]
+	if !ok {
+		return Note{}, ErrNotFound
+	}
+	return n, nil
+}
+
+func (m *memory) Put(ctx context.Context, n Note) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notes[n.ID] = n
+	return nil
+}
+""",
+    "docs/api.md": "# API\n\n- `GET /notes/{id}` — 200, or 404 when missing\n- `POST /notes` — 201\n",
+}
+
+for rel, body in PROJECT_FILES.items():
+    path = os.path.join(CWD, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(body)
+
+# A throwaway nvim config inside the synthetic HOME. The recording must not
+# load the real one: it would pull in personal plugins, and a public GIF is the
+# last place to find out what they are. This one only turns on the things that
+# make a screenshot readable.
+NVIM_CONFIG = """vim.opt.number = true
+vim.opt.termguicolors = true
+vim.opt.laststatus = 2
+vim.opt.cursorline = true
+vim.cmd("syntax on")
+vim.cmd("colorscheme habamax")
+vim.cmd("highlight Normal guibg=NONE ctermbg=NONE")
+
+-- Centre the line verbose jumped to. Without this nvim leaves it on the last
+-- row of the screen, so the screenshot shows everything above the change and
+-- none of the change itself.
+vim.api.nvim_create_autocmd("VimEnter", { command = "normal! zz" })
+"""
+nvim_dir = os.path.join(HOME, ".config", "nvim")
+os.makedirs(nvim_dir, exist_ok=True)
+open(os.path.join(nvim_dir, "init.lua"), "w").write(NVIM_CONFIG)
 
 print("wrote", PROJECT_DIR)
 print("session lines:", len(lines), "| agent lines:", len(agent_lines))

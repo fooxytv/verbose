@@ -1,14 +1,16 @@
 package session
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestBuildReplaySkipsBookkeepingAndEmptyThinking(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{
 			{Type: EventUserPrompt, UserText: "add a health check"},
 			// Extended thinking is signed but never retained, so every thinking
@@ -20,7 +22,7 @@ func TestBuildReplaySkipsBookkeepingAndEmptyThinking(t *testing.T) {
 			{Type: EventSystem},
 			{Type: EventText, Text: "I'll add the endpoint first."},
 			{Type: EventToolUse, ToolName: "Write", ToolInput: map[string]interface{}{
-				"file_path": "/repo/health.go"}},
+				"file_path": filepath.Join(root, "health.go")}},
 		},
 	}
 
@@ -107,10 +109,18 @@ func TestDescribeEventReportsPartialRead(t *testing.T) {
 // Paths are shown relative to the session's cwd, so a step reads as a filename
 // rather than a full home-directory path.
 func TestRelPathShortensAgainstCWD(t *testing.T) {
+	root := testRoot()
+	// Outside the project, so it is returned whole rather than shortened.
+	elsewhere := filepath.Join(filepath.Dir(root), "elsewhere", "c.go")
+
 	cases := []struct{ path, cwd, want string }{
-		{"/repo/a/b.go", "/repo", "a/b.go"},
-		{"/elsewhere/c.go", "/repo", "/elsewhere/c.go"},
-		{"", "/repo", "a file"},
+		// relPath produces DISPLAY text, so it carries the platform's
+		// separator: a Windows reader looking at a Windows transcript wants
+		// a\b.go, not a/b.go. The expectation is built the same way rather
+		// than hardcoding a slash.
+		{filepath.Join(root, "a", "b.go"), root, filepath.Join("a", "b.go")},
+		{elsewhere, root, elsewhere},
+		{"", root, "a file"},
 	}
 	for _, c := range cases {
 		if got := relPath(c.path, c.cwd); got != c.want {
@@ -289,13 +299,15 @@ func TestStepCodeRecoversShellWrites(t *testing.T) {
 // A step that wrote a file is titled by the file, not by the command that
 // carried it — "Ran mkdir -p … && cat > app.js <<'EOF'" says much less.
 func TestBuildReplayTitlesShellWritesByFile(t *testing.T) {
+	root := testRoot()
 	sess := &Session{
-		Info: SessionInfo{CWD: "/repo"},
+		Info: SessionInfo{CWD: root},
 		Events: []Event{{
 			Type:     EventToolUse,
 			ToolName: "Bash",
 			ToolInput: map[string]interface{}{
-				"command": "mkdir -p /repo/src && cat > /repo/src/app.js <<'EOF'\nlet a\nEOF",
+				"command": "mkdir -p " + filepath.Join(root, "src") +
+					" && cat > " + filepath.Join(root, "src", "app.js") + " <<'EOF'\nlet a\nEOF",
 			},
 		}},
 	}
@@ -303,8 +315,9 @@ func TestBuildReplayTitlesShellWritesByFile(t *testing.T) {
 	if len(steps) != 1 {
 		t.Fatalf("got %d steps, want 1", len(steps))
 	}
-	if steps[0].Title != "Wrote src/app.js" {
-		t.Errorf("title = %q, want %q", steps[0].Title, "Wrote src/app.js")
+	wantTitle := "Wrote " + filepath.Join("src", "app.js")
+	if steps[0].Title != wantTitle {
+		t.Errorf("title = %q, want %q", steps[0].Title, wantTitle)
 	}
 	if steps[0].Code != "let a" {
 		t.Errorf("code = %q, want %q", steps[0].Code, "let a")
