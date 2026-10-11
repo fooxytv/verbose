@@ -22,6 +22,9 @@ type Store struct {
 
 	ocDBs      map[string]time.Time // tracked OpenCode DBs: path → last mtime
 	ocExtraDBs []string             // explicitly specified OpenCode DB paths
+
+	miloDirs      map[string]time.Time // tracked Milo sessions dirs: path → last mtime
+	miloExtraDirs []string             // explicitly specified Milo sessions dirs
 }
 
 // NewStore creates a session store that scans ~/.claude/projects/.
@@ -43,6 +46,7 @@ func NewStore() (*Store, error) {
 		watcher:  watcher,
 		updates:  make(chan struct{}, 1),
 		ocDBs:    make(map[string]time.Time),
+		miloDirs: make(map[string]time.Time),
 	}
 
 	return s, nil
@@ -51,6 +55,11 @@ func NewStore() (*Store, error) {
 // AddOpenCodeDB adds an explicit OpenCode database path to scan.
 func (s *Store) AddOpenCodeDB(path string) {
 	s.ocExtraDBs = append(s.ocExtraDBs, path)
+}
+
+// AddMiloDir adds an explicit Milo `sessions/` directory to scan.
+func (s *Store) AddMiloDir(path string) {
+	s.miloExtraDirs = append(s.miloExtraDirs, path)
 }
 
 // Scan discovers all sessions from the Claude projects directory.
@@ -93,6 +102,9 @@ func (s *Store) Scan() error {
 
 	// Scan for OpenCode databases
 	s.scanOpenCodeDBs()
+
+	// Scan for Milo session directories
+	s.scanMiloDirs()
 
 	// Every transcript is loaded by now, so subagent runs can be anchored back
 	// into the sessions that launched them.
@@ -355,6 +367,39 @@ func (s *Store) scanOpenCodeDBs() {
 	}
 }
 
+// scanMiloDirs discovers and parses Milo session directories.
+//
+// Unlike Claude Code and OpenCode, Milo is a server: one `sessions/` directory
+// holds every chat and every delivery run, and it sits beside the checkout
+// rather than under a dot-directory in $HOME. A directory that does not exist
+// is the normal case for a machine with no Milo on it, so a miss is silent.
+func (s *Store) scanMiloDirs() {
+	candidates := make(map[string]bool)
+	for _, p := range s.miloExtraDirs {
+		candidates[p] = true
+	}
+	for _, p := range DefaultMiloDirs() {
+		candidates[p] = true
+	}
+
+	for dir := range candidates {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		sessions, err := ParseMiloDir(dir)
+		if err != nil {
+			continue
+		}
+		s.mu.Lock()
+		s.miloDirs[dir] = info.ModTime()
+		for _, sess := range sessions {
+			s.sessions[sess.Info.ID] = sess
+		}
+		s.mu.Unlock()
+	}
+}
+
 // How long to wait after a write before re-parsing, and the longest a file may
 // stay dirty while being written to continuously. Without the second bound, an
 // agent that writes more often than the debounce interval would never trigger a
@@ -430,6 +475,9 @@ func (s *Store) Watch() <-chan struct{} {
 	// Poll OpenCode databases for changes
 	go s.watchOpenCode()
 
+	// Poll Milo session directories for changes
+	go s.watchMilo()
+
 	return s.updates
 }
 
@@ -481,6 +529,94 @@ func (s *Store) watchOpenCode() {
 }
 
 // GetSessions returns all sessions sorted by last update time (newest first).
+// watchMilo polls tracked Milo session directories for changes.
+//
+// It compares the newest mtime among the directory's logs rather than the
+// mtime of the directory itself: a directory's mtime only moves when an entry
+// is added or removed, and Milo spends most of its time *appending* to logs
+// that already exist. Watching the directory alone would therefore show a new
+// session appearing and then never update again while it ran.
+func (s *Store) watchMilo() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		changed := false
+
+		s.mu.RLock()
+		tracked := make(map[string]time.Time, len(s.miloDirs))
+		for dir, mtime := range s.miloDirs {
+			tracked[dir] = mtime
+		}
+		s.mu.RUnlock()
+
+		for dir, lastMtime := range tracked {
+			newest := miloNewestMtime(dir)
+			if !newest.After(lastMtime) {
+				continue
+			}
+
+			sessions, err := ParseMiloDir(dir)
+			if err != nil {
+				continue
+			}
+
+			s.mu.Lock()
+			s.miloDirs[dir] = newest
+			for _, sess := range sessions {
+				s.sessions[sess.Info.ID] = sess
+			}
+			s.mu.Unlock()
+			changed = true
+		}
+
+		if changed {
+			select {
+			case s.updates <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// miloNewestMtime is the most recent modification time among a Milo sessions
+// directory's logs, including one level of runs/<run>/events.jsonl.
+func miloNewestMtime(dir string) time.Time {
+	var newest time.Time
+	bump := func(fi os.FileInfo) {
+		if fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return newest
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			bump(fi)
+		}
+	}
+
+	runEntries, err := os.ReadDir(filepath.Join(dir, "runs"))
+	if err != nil {
+		return newest
+	}
+	for _, e := range runEntries {
+		if !e.IsDir() {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(dir, "runs", e.Name(), "events.jsonl")); err == nil {
+			bump(fi)
+		}
+	}
+	return newest
+}
+
 func (s *Store) GetSessions() []SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
