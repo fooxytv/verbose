@@ -41,7 +41,9 @@ interactive, color-coded viewer with real-time updates.
 ## What it looks like
 
 **Every session across every project**, by what it is about rather than by id.
-`◦` marks a subagent run, `◈` an OpenCode session.
+`◦` marks a subagent run, `◈` an OpenCode session. A subagent sits **under the
+session that spawned it**, joined by `├─` and `└─`, so one piece of work reads
+as one block instead of rows scattered by timestamp.
 
 ![sessions](docs/img/sessions.png)
 
@@ -65,6 +67,14 @@ whatever `$EDITOR` you already use — here nvim on `handler.go:41`, the hunk th
 session had just applied.
 
 ![editor](docs/img/editor.png)
+
+Each row keeps its **own** cost, tokens and churn — a parent is not a total of
+its children. Summing the column still counts every run exactly once, which is
+what the project view relies on.
+
+A subagent whose parent is not in the list — filtered to another project, or
+its transcript deleted — stays where it is rather than being hidden, because it
+still carries its own cost and its own work.
 
 ## Requirements
 
@@ -189,6 +199,7 @@ In the replay view:
 | `Up` / `Down` | Scroll — takes manual control and pauses |
 | `+` / `-` | Faster / slower (0.5s to 15s per step) |
 | `/` | Go to a step by number — type `24`, press enter |
+| `a` / `A` | Switch to the next / previous subagent of this run, without leaving the replay |
 | `Tab` | Code only — just the steps that wrote something |
 | `f` | Follow a running session (on by default) |
 | `0` | Back to the first step |
@@ -265,6 +276,23 @@ filename, or analysed from the content when a heredoc has no target. The colour
 depth matches the terminal: truecolor where there is truecolor, 256 colours
 otherwise. Highlighted files are cached, so a step costs about a millisecond to
 re-render regardless of size.
+
+### Subagents in a replay
+
+A parent's replay **already contains** its subagents' turns, spliced in at the
+call that launched them and marked `│ subagent`. On one real session that was
+270 of 347 steps, and 193 of the 194 steps that touched a file — the agents did
+nearly all the work.
+
+What a parent's timeline cannot show is each run as its own thing: its own
+cost, its own tokens, its own step numbers. **`a` swaps which session the
+replay is playing** — parent, each agent in turn, back to the parent — without
+leaving the view. `A` goes the other way. The header says which you are on
+(`◦ 1 of 2 · scout`), and coming back returns you to the step you left rather
+than to the beginning.
+
+The tree follows the swap, so it marks the files that session touched rather
+than keeping the previous one's.
 
 ### Following a live session
 

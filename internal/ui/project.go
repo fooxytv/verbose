@@ -108,7 +108,7 @@ func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height 
 	lines = append(lines, "")
 
 	for i, s := range proj.Sessions {
-		line := formatSessionLine(s, width-4)
+		line := formatSessionLine(s, width-4, nestConnector(proj.Sessions, i))
 		if i == cursor {
 			lines = append(lines, selectedStyle.Render("▸ "+line))
 		} else {

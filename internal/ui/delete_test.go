@@ -348,7 +348,9 @@ func TestSessionRowsFitTerminalWidth(t *testing.T) {
 	}
 
 	for _, width := range []int{80, 100, 120, 155, 200} {
-		row := formatSessionLine(info, width)
+		// The nested form is the widest: the connector sits inside the status
+		// column, so if that still fits, an unnested row does too.
+		row := formatSessionLine(info, width, "└─")
 		if w := visibleLen(row); w > width-2 {
 			t.Errorf("width %d: row is %d columns: %q", width, w, row)
 		}
@@ -361,8 +363,54 @@ func TestSessionRowsFitTerminalWidth(t *testing.T) {
 
 // With no title to show, the ID is better than an empty column.
 func TestSessionRowFallsBackToID(t *testing.T) {
-	row := formatSessionLine(session.SessionInfo{ID: "abc12345-6789", ProjectName: "repo"}, 120)
+	row := formatSessionLine(session.SessionInfo{ID: "abc12345-6789", ProjectName: "repo"}, 120, "")
 	if !strings.Contains(row, "abc12345") {
 		t.Errorf("untitled session lost its identifier: %q", row)
 	}
+}
+
+// The connector lives inside the four-wide status column, so a nested row and
+// a plain one must put every later column in the same place. fmt pads %s by
+// runes, which is what makes "└─◦" and "●" both occupy four columns — a
+// byte-counting pad would shift the whole row left by one.
+func TestNestedRowKeepsEveryColumnAligned(t *testing.T) {
+	info := session.SessionInfo{
+		ProjectName: "notification-pipeline",
+		ID:          "oc-ses_k3m9q2x7v4b8n1z6c5t0r9w2y8",
+		Title:       "Review the delivery worker tests",
+		LinesAdded:  120, LinesRemoved: 7,
+	}
+
+	for _, width := range []int{80, 120, 200} {
+		plain := stripAnsi(formatSessionLine(info, width, ""))
+		for _, connector := range []string{"└─", "├─"} {
+			nested := stripAnsi(formatSessionLine(info, width, connector))
+
+			// Rune offsets, not byte offsets: ● is three bytes and └─ is six,
+			// so a byte comparison reports a shift that the terminal never
+			// draws. This is the same byte-versus-rune trap that cut rows
+			// short before truncateRunes existed.
+			if a, b := runeIndex(plain, "notification"), runeIndex(nested, "notification"); a != b {
+				t.Errorf("width %d, connector %q: project starts at column %d nested vs %d plain\n plain : %q\n nested: %q",
+					width, connector, b, a, plain, nested)
+			}
+			if a, b := runeIndex(plain, "Review"), runeIndex(nested, "Review"); a != b {
+				t.Errorf("width %d, connector %q: label starts at column %d nested vs %d plain",
+					width, connector, b, a)
+			}
+			if w := terminalColumns(nested); w > width-2 {
+				t.Errorf("width %d, connector %q: row is %d columns", width, connector, w)
+			}
+		}
+	}
+}
+
+// runeIndex is strings.Index measured in runes, which is what a terminal column
+// corresponds to.
+func runeIndex(s, substr string) int {
+	b := strings.Index(s, substr)
+	if b < 0 {
+		return -1
+	}
+	return len([]rune(s[:b]))
 }
