@@ -109,15 +109,45 @@ func changeLine(changes []session.FileChange) int {
 	return 0
 }
 
+// editMode says where the editor goes.
+type editMode int
+
+const (
+	// editInPlace suspends verbose and gives the editor the whole terminal,
+	// handing it back on quit. This is the default, and what $EDITOR does
+	// everywhere else — git commit, crontab -e, visudo.
+	editInPlace editMode = iota
+
+	// editBeside puts the editor in a tmux pane or a terminal tab next to
+	// verbose, leaving both on screen.
+	editBeside
+)
+
+// editModeFor maps the pressed key to where the editor opens. Shift asks for
+// the editor beside verbose; the bare key takes the terminal.
+func editModeFor(key string) editMode {
+	if key == "E" {
+		return editBeside
+	}
+	return editInPlace
+}
+
 // editFile opens path in the reader's editor, at the line of its last recorded
 // change. It returns the command to run and sets a status message instead when
 // there is nothing to open.
 //
-// Playback stops first. An editor takes the terminal — or, in tmux, the pane
-// beside it — and coming back to a replay that ran on without you is
-// disorienting. replayGen is bumped so the ticks already scheduled are dropped
-// rather than delivered in a burst on return.
-func (m *Model) editFile(path string) tea.Cmd {
+// Playback stops either way. Coming back to a replay that ran on without you
+// is disorienting, and replayGen is bumped so the ticks already scheduled are
+// dropped rather than delivered in a burst on return.
+//
+// In place is the default because the two keys are pressed at different rates.
+// `c` opens a CLI beside verbose once per session; `e` can be pressed on every
+// file in a replay, and launchInTmux splits a NEW pane every time with no
+// reuse — five files, five panes. Beside also buys less than it looks: playback
+// is paused before the editor opens, so there is nothing moving to watch, and
+// tmux send-keys is fire-and-forget so verbose never learns when you quit.
+// `E` asks for it anyway.
+func (m *Model) editFile(path string, mode editMode) tea.Cmd {
 	if path == "" {
 		m.statusMsg = "No file to edit here"
 		return clearStatusAfter()
@@ -154,7 +184,11 @@ func (m *Model) editFile(path string) tea.Cmd {
 	m.replayGen++
 
 	line := changeLine(session.FileChanges(m.selectedSession, path, m.treeUpto()))
-	return launchInTerminal(ed.bin, editorArgs(ed, path, line), cwd)
+	args := editorArgs(ed, path, line)
+	if mode == editBeside {
+		return launchInTerminal(ed.bin, args, cwd)
+	}
+	return launchInPlace(ed.bin, args, cwd)
 }
 
 // editTreeSelection opens whatever the tree cursor is on.
@@ -162,7 +196,7 @@ func (m *Model) editFile(path string) tea.Cmd {
 // It takes the followed row over the stored one and keeps it, exactly as
 // opening a diff does: the reader is now working on this file, not watching
 // wherever the replay goes next.
-func (m *Model) editTreeSelection() tea.Cmd {
+func (m *Model) editTreeSelection(mode editMode) tea.Cmd {
 	rows := m.treeRows()
 	if len(rows) == 0 {
 		m.statusMsg = "No file to edit here"
@@ -173,15 +207,15 @@ func (m *Model) editTreeSelection() tea.Cmd {
 	m.treeCursor = clampInt(at, 0, len(rows)-1)
 	m.treeFollow = false
 
-	return m.editFile(rows[m.treeCursor].node.Path)
+	return m.editFile(rows[m.treeCursor].node.Path, mode)
 }
 
 // editCurrentStep opens the file the replay is on, for a replay with no tree
 // beside it to point at one.
-func (m *Model) editCurrentStep() tea.Cmd {
+func (m *Model) editCurrentStep(mode editMode) tea.Cmd {
 	if m.replayIndex < len(m.replaySteps) {
 		if path := m.replaySteps[m.replayIndex].FilePath; path != "" {
-			return m.editFile(path)
+			return m.editFile(path, mode)
 		}
 	}
 	m.statusMsg = "This step does not touch a file"

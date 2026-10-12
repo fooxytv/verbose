@@ -189,6 +189,17 @@ of `nvim`/`vim`/`vi`/`nano` on `PATH` (`notepad` on Windows). **An editor is
 never a build or install dependency** — nothing in `editor.go` is reached until
 the key is pressed.
 
+**`e` is in place, `E` is beside.** The first version used `launchInTerminal`
+for both, reusing the `c` key's ladder — and that was wrong, because the two
+keys are pressed at different rates. `c` opens a CLI once per session; `e` gets
+pressed on file after file while reading, and `launchInTmux` splits a NEW pane
+every time with no reuse. Four files, four panes. Beside also buys less than it
+looks: playback is paused before the editor opens, so there is nothing moving
+to watch, and `tmux send-keys` is fire-and-forget so verbose never learns when
+you quit. `editModeFor` is the single place the mapping lives — a `tea.Cmd` is
+opaque, so a handler test cannot tell the two apart and the mapping is tested
+directly instead.
+
 - **Only vi-family editors get `+N`.** An editor that does not understand the
   flag treats it as a second filename and opens an empty buffer called `+12`.
   `lineArg` returns nothing for anything not on its list; losing the jump beats

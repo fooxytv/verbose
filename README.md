@@ -198,6 +198,7 @@ In the replay view:
 | `}` / `{` | Open / close a directory in the sidebar |
 | `d` | Open the selected file's diff (`d` or `Esc` closes) |
 | `e` | Open the selected file in `$EDITOR`, at the line that changed |
+| `E` | The same, but beside verbose — a tmux pane or a new tab |
 | `c` | Continue the session: see its last output and reply |
 | `Ctrl`+`f` | Hand the tree's follow back to the replay |
 | `Esc` | Back |
@@ -425,10 +426,20 @@ at the top.
 
 The editor is whatever you already use: `$VISUAL`, then `$EDITOR`, then the
 first of `nvim`, `vim`, `vi` or `nano` found on your PATH (`notepad` on
-Windows). It goes where the CLI goes — a tmux split where there is one,
-otherwise a new terminal tab, otherwise taking over the terminal and handing it
-back when you quit. Playback stops first, so a replay is not several minutes
-further on when you return.
+Windows).
+
+**`e` takes the terminal and hands it back when you quit**, the way `$EDITOR`
+behaves in `git commit` or `crontab -e`. Verbose comes back on the same step,
+with the same tree row selected.
+
+**`E` opens it beside verbose instead** — a tmux pane where there is one,
+otherwise a new terminal tab. Useful when you want the diff still on screen,
+but it is the explicit choice rather than the default: a new pane is created
+each time, so opening four files leaves four panes, and verbose cannot tell
+when you have finished with them.
+
+Playback stops either way, so a replay is not several minutes further on when
+you return.
 
 **No editor is required to run verbose.** None of this is reached unless you
 press `e`, and nothing is added to the build. Anything your editor brings — an
