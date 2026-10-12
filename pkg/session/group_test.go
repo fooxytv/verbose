@@ -103,3 +103,42 @@ func TestNestingPredicates(t *testing.T) {
 	IsNestedUnder(infos, 99)
 	IsLastChild(infos, 99)
 }
+
+// Switching between a parent and its agents must not depend on which one you
+// opened first, so any member returns the same group.
+func TestRunGroupIsTheSameFromEitherEnd(t *testing.T) {
+	infos := []SessionInfo{
+		{ID: "unrelated", LastUpdate: at(60)},
+		{ID: "parent", LastUpdate: at(50)},
+		{ID: "k2", IsAgent: true, ParentSessionID: "parent", LastUpdate: at(40)},
+		{ID: "k1", IsAgent: true, ParentSessionID: "parent", LastUpdate: at(20)},
+	}
+	want := []string{"parent", "k1", "k2"}
+
+	for _, from := range want {
+		if got := ids(RunGroup(infos, from)); len(got) != 3 ||
+			got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+			t.Errorf("RunGroup(%q) = %v, want %v", from, got, want)
+		}
+	}
+}
+
+func TestRunGroupOfASessionWithNoAgents(t *testing.T) {
+	infos := []SessionInfo{{ID: "alone", LastUpdate: at(10)}}
+	eq(t, ids(RunGroup(infos, "alone")), "alone")
+}
+
+// An orphan is its own group rather than nothing, so a caller can always treat
+// the result as a ring to cycle through.
+func TestRunGroupOfAnOrphan(t *testing.T) {
+	infos := []SessionInfo{
+		{ID: "orphan", IsAgent: true, ParentSessionID: "gone", LastUpdate: at(10)},
+	}
+	eq(t, ids(RunGroup(infos, "orphan")), "orphan")
+}
+
+func TestRunGroupOfAnUnknownID(t *testing.T) {
+	if got := RunGroup([]SessionInfo{{ID: "a"}}, "nope"); got != nil {
+		t.Errorf("RunGroup of an unknown id = %v, want nil", got)
+	}
+}

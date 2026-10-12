@@ -109,6 +109,10 @@ type Model struct {
 	// being written, so a running agent can be followed at reading speed.
 	// Falling behind is expected and reported, not corrected.
 	replayLive bool
+	// replayMarks remembers the step each session was left on, so switching
+	// between a parent and its agents and back returns you where you were
+	// rather than to step 1.
+	replayMarks map[string]int
 	// replayCodeOnly narrows the step list to the steps that wrote code.
 	replayCodeOnly bool
 	// replayStepAt is when playback reached the current step, which is what the
@@ -454,6 +458,7 @@ func (m Model) View() string {
 			helpKey{"tab", codeLabel},
 			helpKey{"+/-", "speed"},
 			helpKey{"/", "go to step"},
+			helpKey{"a", "agents"},
 		)
 		if !m.treeSplit {
 			helpKeys = append(helpKeys, helpKey{"e", "edit"})

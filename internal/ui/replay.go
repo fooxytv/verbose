@@ -81,6 +81,12 @@ type replayView struct {
 	// wrote code, which is what the header and the empty state have to say.
 	codeOnly bool
 
+	// run says which member of a parent-and-subagents group is showing, and is
+	// empty when the session has no agents. A status message was not enough:
+	// it clears after a few seconds, and after that there is nothing on screen
+	// saying whose work you are reading.
+	run string
+
 	delay         time.Duration
 	width, height int
 }
@@ -115,6 +121,9 @@ func renderReplay(v replayView) string {
 
 	// Header: which session, where we are in it, and whether it is running.
 	header := titleStyle.Render("Replay")
+	if v.run != "" {
+		header += "  " + agentStyle.Render(v.run)
+	}
 	if v.codeOnly {
 		header += "  " + agentStyle.Render("code only")
 	}
@@ -919,6 +928,16 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		m.replayStep(-1)
 		return m, nil
 
+	case "a", "A":
+		// Swap which session the replay is playing: parent, each of its
+		// agents, back to the parent. A goes the other way round the ring.
+		step := 1
+		if key == "A" {
+			step = -1
+		}
+		m.switchRun(step)
+		return m, tea.Batch(m.replayAdvanceCmd(), clearStatusAfter())
+
 	case "e", "E":
 		// With the tree open the sidebar handler has already taken this and the
 		// cursor decides the file; without it, the step does.
@@ -1132,8 +1151,114 @@ func (m Model) replayViewState(width, height int) replayView {
 		playing:  m.replayPlaying,
 		waiting:  m.replayWaiting(),
 		codeOnly: m.replayCodeOnly,
+		run:      m.runLabel(),
 		delay:    m.replayDelay,
 		width:    width,
 		height:   height,
 	}
+}
+
+// Switching between a parent session and the subagents it spawned.
+
+// switchRun moves to the next or previous session of this run — the parent and
+// its agents — without leaving the replay.
+//
+// The parent's timeline already contains every subagent turn, spliced in at the
+// call that launched it. What this reaches is the agent's own session: its own
+// cost, its own token count, its own step numbers. On the session that prompted
+// the feature the agents carried 78% of the steps, so "whose work was this"
+// was a question the list could answer and the replay could not.
+func (m *Model) switchRun(delta int) {
+	if m.selectedSession == nil || m.store == nil {
+		return
+	}
+	group := session.RunGroup(m.store.GetSessions(), m.selectedSession.Info.ID)
+	if len(group) < 2 {
+		m.statusMsg = "No subagents in this session"
+		return
+	}
+
+	at := 0
+	for i, s := range group {
+		if s.ID == m.selectedSession.Info.ID {
+			at = i
+			break
+		}
+	}
+	next := group[((at+delta)%len(group)+len(group))%len(group)]
+
+	sess := m.store.GetSession(next.ID)
+	if sess == nil {
+		m.statusMsg = "Could not open " + next.ID
+		return
+	}
+
+	// Remember where this session was left before the pointer is swapped.
+	if m.replayMarks == nil {
+		m.replayMarks = map[string]int{}
+	}
+	m.replayMarks[m.selectedSession.Info.ID] = m.replayIndex
+
+	wasSplit, wasPlaying := m.treeSplit, m.replayPlaying
+	m.startReplay(sess)
+	m.replayIndex = clampInt(m.replayMarks[next.ID], 0, max(0, len(m.replaySteps)-1))
+
+	// The tree is read from the session, so it has to follow the swap or it
+	// keeps marking files with the other session's activity.
+	if wasSplit {
+		m.loadTreeFor(sess)
+		m.treeSplit = true
+		m.treeFollow = true
+	}
+	m.replayPlaying = wasPlaying
+	if wasPlaying {
+		m.replayTyped = 0
+		m.replayStepAt = time.Now()
+	}
+
+	m.statusMsg = runPositionLabel(group, next)
+}
+
+// runPositionLabel says which member of the run is now showing.
+func runPositionLabel(group []session.SessionInfo, cur session.SessionInfo) string {
+	if !cur.IsAgent {
+		return fmt.Sprintf("Parent session · %d subagent(s)", len(group)-1)
+	}
+	for i, s := range group[1:] {
+		if s.ID == cur.ID {
+			name := s.AgentType
+			if name == "" {
+				name = strings.TrimPrefix(s.ID, "agent-")
+			}
+			return fmt.Sprintf("Subagent %d of %d · %s", i+1, len(group)-1, name)
+		}
+	}
+	return "Subagent"
+}
+
+// runLabel is the header's note of which session of a run is showing — "◦ 1 of
+// 2" inside a subagent, "◦ 2 agents" on a parent that has them, and nothing at
+// all for a session that spawned none.
+func (m Model) runLabel() string {
+	if m.selectedSession == nil || m.store == nil {
+		return ""
+	}
+	group := session.RunGroup(m.store.GetSessions(), m.selectedSession.Info.ID)
+	if len(group) < 2 {
+		return ""
+	}
+	cur := m.selectedSession.Info
+	if !cur.IsAgent {
+		return fmt.Sprintf("◦ %d agents", len(group)-1)
+	}
+	for i, s := range group[1:] {
+		if s.ID == cur.ID {
+			label := fmt.Sprintf("◦ %d of %d", i+1, len(group)-1)
+			if s.AgentType != "" {
+				label += " · " + s.AgentType
+			}
+			return label
+		}
+	}
+	return "◦ subagent"
 }

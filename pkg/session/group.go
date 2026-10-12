@@ -90,3 +90,54 @@ func IsLastChild(infos []SessionInfo, i int) bool {
 	}
 	return true
 }
+
+// RunGroup is one piece of work: a parent session and the subagents it
+// spawned, parent first, then its agents in the order they ran.
+//
+// id may name the parent or any of its agents — switching between them should
+// not depend on which one you opened first. A session with no agents, or an
+// orphan whose parent is not in infos, returns just itself, so a caller can
+// always treat the result as a ring.
+func RunGroup(infos []SessionInfo, id string) []SessionInfo {
+	var self *SessionInfo
+	for i := range infos {
+		if infos[i].ID == id {
+			self = &infos[i]
+			break
+		}
+	}
+	if self == nil {
+		return nil
+	}
+
+	parentID := self.ID
+	if self.IsAgent && self.ParentSessionID != "" {
+		parentID = self.ParentSessionID
+	}
+
+	var parent *SessionInfo
+	for i := range infos {
+		if infos[i].ID == parentID {
+			parent = &infos[i]
+			break
+		}
+	}
+	if parent == nil {
+		// An orphan: its parent is filtered out or gone, so it is its own group.
+		return []SessionInfo{*self}
+	}
+
+	group := []SessionInfo{*parent}
+	for _, s := range infos {
+		if s.IsAgent && s.ParentSessionID == parentID {
+			group = append(group, s)
+		}
+	}
+	if len(group) > 1 {
+		kids := group[1:]
+		sort.SliceStable(kids, func(i, j int) bool {
+			return kids[i].LastUpdate.Before(kids[j].LastUpdate)
+		})
+	}
+	return group
+}

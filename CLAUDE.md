@@ -201,6 +201,19 @@ unrelated work. `GroupSubagents` then pulls each subagent under its parent.
 - **Totals stay per row.** A parent is not the sum of its children; the project
   view sums the column and would double-count.
 
+### Switching between a parent and its agents
+
+`a` swaps the session under the replay; `RunGroup` builds the ring.
+
+- **Any member returns the same group**, so it does not matter whether the
+  parent or an agent was opened first.
+- **Remember the step per session** (`replayMarks`), or switching back drops
+  you at step 1 and stops being worth doing.
+- **The tree must be reloaded** on the swap, or it keeps marking files with the
+  previous session's activity.
+- **The header carries the position**, not just a status message: the message
+  clears after a few seconds and then nothing on screen says whose work it is.
+
 ## Opening an editor
 
 `e` hands the file under the cursor to `$VISUAL`, then `$EDITOR`, then the first
