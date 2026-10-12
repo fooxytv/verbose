@@ -672,7 +672,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, clearStatusAfter()
 
 	case "e", "E":
-		return m, m.editTreeSelection()
+		return m, m.editTreeSelection(editModeFor(key))
 
 	case "tab":
 		m.treeChangedOnly = !m.treeChangedOnly
@@ -936,7 +936,7 @@ func (m *Model) handleTreeSidebarKey(key string, paneHeight int) (tea.Cmd, bool)
 	case "d", "D":
 		m.openDiff()
 	case "e", "E":
-		cmd = m.editTreeSelection()
+		cmd = m.editTreeSelection(editModeFor(key))
 	case "ctrl+f":
 		// Hand the follow back to the replay.
 		m.treeFollow = true
@@ -1058,10 +1058,10 @@ func (m Model) handleDiffKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e", "E":
-		// Edit the file being diffed. The panel stays open: coming back to the
+		// Edit the file being diffed; E puts it beside verbose. The panel stays open: coming back to the
 		// diff you were reading is the point, and it redraws from disk-backed
 		// transcript data that the edit cannot invalidate.
-		return m, m.editFile(m.diffPath)
+		return m, m.editFile(m.diffPath, editModeFor(key))
 
 	case "down", "j":
 		m.diffScroll++

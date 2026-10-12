@@ -922,7 +922,7 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 	case "e", "E":
 		// With the tree open the sidebar handler has already taken this and the
 		// cursor decides the file; without it, the step does.
-		return m, m.editCurrentStep()
+		return m, m.editCurrentStep(editModeFor(key))
 
 	case "down", "j":
 		m.replayTakeOver()

@@ -143,7 +143,7 @@ func TestChangeLineTakesTheLatestHunk(t *testing.T) {
 func TestEditFileRefusesAPathThatIsGone(t *testing.T) {
 	t.Setenv("EDITOR", "nano")
 	m := treeModel(t)
-	cmd := m.editFile(filepath.Join(t.TempDir(), "deleted.go"))
+	cmd := m.editFile(filepath.Join(t.TempDir(), "deleted.go"), editInPlace)
 	if cmd == nil {
 		t.Fatal("expected a status-clearing command")
 	}
@@ -155,7 +155,7 @@ func TestEditFileRefusesAPathThatIsGone(t *testing.T) {
 func TestEditFileRefusesADirectory(t *testing.T) {
 	t.Setenv("EDITOR", "nano")
 	m := treeModel(t)
-	m.editFile(t.TempDir())
+	m.editFile(t.TempDir(), editInPlace)
 	if !strings.Contains(m.statusMsg, "is a directory") {
 		t.Errorf("statusMsg = %q, want it to name the directory", m.statusMsg)
 	}
@@ -171,7 +171,7 @@ func TestEditFileSaysSoWhenThereIsNoEditor(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m.editFile(f)
+	m.editFile(f, editInPlace)
 	if !strings.Contains(m.statusMsg, "$EDITOR") {
 		t.Errorf("statusMsg = %q, want it to name $EDITOR", m.statusMsg)
 	}
@@ -200,7 +200,7 @@ func TestEditingStopsPlaybackAndDropsPendingTicks(t *testing.T) {
 		t.Skip("fixture tree has no files")
 	}
 
-	if cmd := m.editFile(file); cmd == nil {
+	if cmd := m.editFile(file, editInPlace); cmd == nil {
 		t.Fatal("editFile returned no command for a real file")
 	}
 	if m.replayPlaying {
@@ -294,5 +294,38 @@ func TestReplayEditSaysSoWhenTheStepTouchesNoFile(t *testing.T) {
 	after := res.(Model)
 	if !strings.Contains(after.statusMsg, "does not touch a file") {
 		t.Errorf("statusMsg = %q, want it to explain there is no file", after.statusMsg)
+	}
+}
+
+// e and E must map to DIFFERENT modes. Binding them together, as the first
+// version did, is what made every press open a tmux pane: launchInTmux splits
+// a NEW one each time with no reuse, so five files meant five panes.
+//
+// The mode is tested here rather than through the key handlers, because a
+// tea.Cmd is opaque — a handler test can only prove a command came back, which
+// stays true when both keys do the same thing.
+func TestEditModeForDistinguishesTheKeys(t *testing.T) {
+	if got := editModeFor("e"); got != editInPlace {
+		t.Errorf(`editModeFor("e") = %d, want in place`, got)
+	}
+	if got := editModeFor("E"); got != editBeside {
+		t.Errorf(`editModeFor("E") = %d, want beside`, got)
+	}
+	if editModeFor("e") == editModeFor("E") {
+		t.Fatal("e and E resolve to the same mode")
+	}
+}
+
+// Both modes must still refuse a file that is gone, an editor that is absent
+// and a directory — the guards are not specific to where the editor opens.
+func TestBothEditModesKeepTheGuards(t *testing.T) {
+	t.Setenv("EDITOR", "nano")
+	for _, mode := range []editMode{editInPlace, editBeside} {
+		m := treeModel(t)
+		m.editFile(filepath.Join(t.TempDir(), "never-existed.go"), mode)
+		if !strings.Contains(m.statusMsg, "No longer on disk") {
+			t.Errorf("mode %d: statusMsg = %q, want the file-is-gone message",
+				mode, m.statusMsg)
+		}
 	}
 }
