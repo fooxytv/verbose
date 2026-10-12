@@ -41,7 +41,9 @@ interactive, color-coded viewer with real-time updates.
 ## What it looks like
 
 **Every session across every project**, by what it is about rather than by id.
-`◦` marks a subagent run, `◈` an OpenCode session.
+`◦` marks a subagent run, `◈` an OpenCode session. A subagent sits **under the
+session that spawned it**, joined by `├─` and `└─`, so one piece of work reads
+as one block instead of rows scattered by timestamp.
 
 ![sessions](docs/img/sessions.png)
 
@@ -65,6 +67,14 @@ whatever `$EDITOR` you already use — here nvim on `handler.go:41`, the hunk th
 session had just applied.
 
 ![editor](docs/img/editor.png)
+
+Each row keeps its **own** cost, tokens and churn — a parent is not a total of
+its children. Summing the column still counts every run exactly once, which is
+what the project view relies on.
+
+A subagent whose parent is not in the list — filtered to another project, or
+its transcript deleted — stays where it is rather than being hidden, because it
+still carries its own cost and its own work.
 
 ## Requirements
 

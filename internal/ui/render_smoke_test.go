@@ -85,7 +85,7 @@ func TestRenderRealOpenCodeSessions(t *testing.T) {
 			formatEventLine(sess.Events[i], 116, sess.Info.CWD)
 			formatEventLineSelected(sess.Events[i], 116, sess.Info.CWD)
 		}
-		formatSessionLine(sess.Info, 120)
+		formatSessionLine(sess.Info, 120, "")
 	}
 }
 

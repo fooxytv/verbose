@@ -494,7 +494,9 @@ func (s *Store) GetSessions() []SessionInfo {
 		return infos[i].LastUpdate.After(infos[j].LastUpdate)
 	})
 
-	return infos
+	// Newest-first on its own scatters a session's agents among unrelated work,
+	// so a subagent is pulled up under the parent that spawned it.
+	return GroupSubagents(infos)
 }
 
 // GetSession returns the full parsed session by ID.
@@ -582,10 +584,12 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 
 	proj.EncodedDir = encodedDir
 
-	// Sort sessions by LastUpdate descending
+	// Sort sessions by LastUpdate descending, then pull each subagent under the
+	// parent that spawned it, the same as the main list.
 	sort.Slice(proj.Sessions, func(i, j int) bool {
 		return proj.Sessions[i].LastUpdate.After(proj.Sessions[j].LastUpdate)
 	})
+	proj.Sessions = GroupSubagents(proj.Sessions)
 
 	// Build MostEditedFiles sorted desc by count
 	for _, e := range editCounts {

@@ -50,7 +50,7 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 
 	for i := start; i < end; i++ {
 		s := sessions[i]
-		line := formatSessionLine(s, width)
+		line := formatSessionLine(s, width, nestConnector(sessions, i))
 
 		if i == cursor {
 			b.WriteString(selectedStyle.Render("▸ " + line))
@@ -70,7 +70,19 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 	return b.String()
 }
 
-func formatSessionLine(s session.SessionInfo, width int) string {
+// nestConnector is the tree joint drawn before a subagent's marker, or "" for
+// a row that stands on its own.
+func nestConnector(sessions []session.SessionInfo, i int) string {
+	if !session.IsNestedUnder(sessions, i) {
+		return ""
+	}
+	if session.IsLastChild(sessions, i) {
+		return "└─"
+	}
+	return "├─"
+}
+
+func formatSessionLine(s session.SessionInfo, width int, connector string) string {
 	// Status indicator
 	status := "●"
 	if s.Source == "opencode" {
@@ -78,6 +90,12 @@ func formatSessionLine(s session.SessionInfo, width int) string {
 	} else if s.IsAgent {
 		status = "◦"
 	}
+
+	// The connector goes inside the status column rather than indenting the
+	// row. The column is four wide and a marker is one, so "└─◦" fits without
+	// moving anything to its right — every other column stays aligned, and the
+	// row cannot grow past the width the caller allowed for it.
+	status = connector + status
 
 	ago := timeAgo(s.LastUpdate)
 	totalTokens := s.InputTokens + s.OutputTokens + s.CacheReadTokens + s.CacheWriteTokens

@@ -182,6 +182,25 @@ there is silently dead. Prefer bare characters (`[` `]` `{` `}`); they have no
 modifier to intercept. Verifying that bubbletea *decodes* a sequence is not
 verifying that anything *sends* it.
 
+## Grouping subagents in the list
+
+`GetSessions` sorts newest-first, which scattered a session's agents among
+unrelated work. `GroupSubagents` then pulls each subagent under its parent.
+
+- **Children are ordered oldest-first**, against the list's newest-first rule,
+  so a parent's runs read as the sequence of work.
+- **An orphan keeps its place.** A subagent whose parent is filtered out or
+  deleted still has its own cost and its own work; hiding it or hoisting it to
+  the end loses a real run.
+- **The connector lives inside the four-wide status column**, not as an indent:
+  `fmt` pads `%s` by runes, so `└─◦` and `●` both occupy four columns and every
+  later column stays put. Indenting the row instead shifts them all.
+- **Measure alignment in runes.** `●` is three bytes and `└─` is six, so
+  `strings.Index` reports a shift the terminal never draws — the same
+  byte-versus-rune trap that cut rows short before `truncateRunes`.
+- **Totals stay per row.** A parent is not the sum of its children; the project
+  view sums the column and would double-count.
+
 ## Opening an editor
 
 `e` hands the file under the cursor to `$VISUAL`, then `$EDITOR`, then the first
