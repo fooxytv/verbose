@@ -165,8 +165,17 @@ func renderTree(v treeView) string {
 	if v.changedOn {
 		title += "  " + agentStyle.Render("changed only")
 	}
-	b.WriteString(title + "  " +
-		dimStyle.Render(truncate(session.ShortPath(v.sess.Info.CWD, ""), max(10, v.width-40))) + "\n")
+	b.WriteString(clampWidth(title, v.width) + "\n")
+
+	// The path used to share the title's row, truncated to width-40, which in
+	// a sidebar left about four characters of it — "/tmp/devd…". On its own
+	// row it has the whole pane, and the branch fits beside it.
+	//
+	// The row is written even when there is nothing to put in it, because
+	// treeVisibleRows has to agree with this function exactly: a conditional
+	// row makes the count wrong by one for any session with neither a cwd nor
+	// a branch, and the follow then scrolls to the wrong place.
+	b.WriteString(clampWidth(contextLine(v.sess.Info, usableWidth(v.width)), v.width) + "\n")
 	b.WriteString(treeLegend(v) + "\n\n")
 
 	if len(v.rows) == 0 {
@@ -542,7 +551,8 @@ func scrollToShow(at, total, visible int) int {
 // treeVisibleRows is how many rows of tree a pane of this height shows. It has
 // to agree with the renderer, or following would scroll to the wrong place.
 func treeVisibleRows(height int) int {
-	return max(1, height-5)
+	// Title, context line, legend, two blanks, and the footer's row.
+	return max(1, height-6)
 }
 
 // treeUpto is the event the tree is drawn as of: where the replay has reached,

@@ -214,6 +214,31 @@ unrelated work. `GroupSubagents` then pulls each subagent under its parent.
 - **The header carries the position**, not just a status message: the message
   clears after a few seconds and then nothing on screen says whose work it is.
 
+## The path and branch line
+
+`contextLine` draws the session's directory and branch under the replay's
+progress bar and at the top of the tree.
+
+- **Shorten the middle of a path, the front of a branch.** Both keep their
+  tail: the last path segment is the project, and a branch's tail is what it is
+  for.
+- **Bound the branch before measuring the path.** Real names reach 47
+  characters, and an unbounded one pushed the row past the pane however short
+  the path was. When there is not room for both, the branch goes and the path
+  takes the line — a minimum applied to each *without* dropping one is what
+  overflowed.
+- **The tree writes the row even when it is empty**, because `treeVisibleRows`
+  must agree with `renderTree` exactly. A conditional row makes the count wrong
+  by one and the follow scrolls to the wrong place.
+- **Derive a row-count test from the chrome, never from `treeVisibleRows`.**
+  The renderer uses that function too, so comparing against it is circular: the
+  first version of that test passed at `height-5`, `height-6` and `height-7`
+  alike. It also needs a pane SHORTER than the row list, or the "… N more" note
+  never appears and the over-draw case cannot happen.
+- `⎇` (U+2387) is width 1 and **not** ambiguous-width, unlike `●`, `│` and `└`
+  which are already on screen here. `visibleLen` counts runes, not columns, so
+  an ambiguous glyph is a layout bug waiting for the wrong terminal.
+
 ## Opening an editor
 
 `e` hands the file under the cursor to `$VISUAL`, then `$EDITOR`, then the first
