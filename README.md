@@ -48,7 +48,8 @@ as one block instead of rows scattered by timestamp.
 ![sessions](docs/img/sessions.png)
 
 **Replay** (`R`) plays a session back at reading speed, typing the code out as
-it was written, syntax highlighted.
+it was written, syntax highlighted. Under the progress bar sits the directory
+the work happened in and the branch it was on — `~/workspace/proj  ⎇ main`.
 
 ![replay](docs/img/replay.png)
 
@@ -322,6 +323,20 @@ thinking block on disk has an empty body. What a step shows is derived from
 what was recorded — files, line counts, exit behaviour — and the agent's own
 narration where it exists. Generated explanations are a separate layer, not
 yet built.
+
+### Where the work happened
+
+Both the replay and the tree carry a line with the session's directory and git
+branch. Every transcript records both; neither was on screen while reading one.
+
+Long paths give up their **middle**, not their end — `~/…/team-skills-matrix-poc`
+— because the last segment is the project and the first says which checkout,
+and those are what tell two clones of the same repository apart. A long branch
+gives up its front for the same reason: `…dev-mdevops-pool` says more than
+`feature/allow-jf…`. Nothing is shortened while it all fits.
+
+A session with no recorded branch shows none, and a detached checkout says
+`detached` rather than printing `HEAD` as though it were a branch name.
 
 ## Tree
 

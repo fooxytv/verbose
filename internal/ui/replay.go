@@ -130,7 +130,14 @@ func renderReplay(v replayView) string {
 	b.WriteString(clampWidth(header+"  "+
 		dimStyle.Render(truncate(sess.Info.Title, max(10, width-46))), width) + "\n")
 
-	b.WriteString(clampWidth(replayProgress(v, idx, step, width), width) + "\n\n")
+	b.WriteString(clampWidth(replayProgress(v, idx, step, width), width) + "\n")
+
+	// Where the work happened. Costs a row, so reserved below counts it.
+	ctx := contextLine(sess.Info, usableWidth(width))
+	if ctx != "" {
+		b.WriteString(clampWidth("  "+ctx, width) + "\n")
+	}
+	b.WriteString("\n")
 
 	// The step itself.
 	b.WriteString(clampWidth(replayHeadline(step, sess, width), width) + "\n\n")
@@ -141,6 +148,12 @@ func renderReplay(v replayView) string {
 	// the progress bar, the headline, their blank lines, and the "more lines"
 	// note. The waiting notice costs three more when it is shown.
 	reserved := 9
+	if ctx != "" {
+		// The context line is one more row the body cannot have. Counting it
+		// only when it is drawn matters: a session with neither a cwd nor a
+		// branch gets the row back rather than a blank gap.
+		reserved++
+	}
 	if v.waiting {
 		reserved += 3
 	}
