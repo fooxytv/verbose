@@ -37,9 +37,11 @@ Enter
 Sleep 2.5s
 Screenshot docs/img/sessions.png
 
-# Into the session that did the work.
-Down
-Sleep 500ms
+# Into the session that did the work: row 5, the one that is 2h38m old.
+#
+# FOUR downs, not five. The subagent now sits directly under its parent in the
+# list (`└─◦`), so a fifth lands on the agent's own run instead — five was
+# right before grouping existed and silently wrong after it.
 Down
 Sleep 500ms
 Down
@@ -54,6 +56,25 @@ Sleep 2s
 # Replay it, one step at a time.
 Type "R"
 Sleep 1.5s
+
+# Step 5 is a plan, and a plan is the agent's own markdown: a heading, a table,
+# a numbered list, inline code and bold, rendered rather than flattened into
+# one paragraph.
+#
+# Jumped to by number rather than waited for, so the frame does not depend on
+# playback timing — and then `0` puts the replay back at step 1, so everything
+# after this point is recorded exactly as it was before.
+Type "/"
+Sleep 400ms
+Type "5"
+Sleep 500ms
+Enter
+Sleep 3s
+Screenshot docs/img/plan.png
+Sleep 2s
+Type "0"
+Sleep 800ms
+
 Space
 Sleep 7s
 Screenshot docs/img/replay.png
@@ -65,19 +86,23 @@ Sleep 5s
 Screenshot docs/img/tree-split.png
 Sleep 3s
 
-# A file's diff, side by side.
+# Move up one row to handler.go, then open its diff side by side.
+#
+# The tree is following the replay, which has just written handler_test.go — a
+# NEW file, so its diff is all additions with nothing to pair against. handler.go
+# is the one that was patched, and it has the removed line beside the one that
+# replaced it, which is what this view is for.
+Type "["
+Sleep 1.2s
 Type "d"
 Sleep 3.5s
 Screenshot docs/img/diff.png
 Sleep 2.5s
 
-# Close the diff, move up to handler.go and open it in $EDITOR. That file is
-# the one the session actually patched, so the editor opens on the change at
+# Close the diff and open that same file in $EDITOR. It opens on the change at
 # line 41 rather than at the top.
 Escape
 Sleep 1s
-Type "["
-Sleep 1.2s
 Type "e"
 Sleep 3.5s
 Screenshot docs/img/editor.png

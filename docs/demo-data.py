@@ -80,8 +80,25 @@ tool("t2", "Grep", {"pattern": "ErrNotFound", "path": "internal"})
 result("t2", {"stdout": "internal/store/store.go:17:var ErrNotFound = errors.New(\"note not found\")\n",
               "stderr": "", "interrupted": False})
 
-say("The store already returns a typed error; the handler just never checks for "
-    "it. Mapping it to 404 is the fix.")
+# A plan the way an agent actually writes one: markdown. The replay renders it
+# — heading, table, numbered list, `code`, **bold** — which is the whole point
+# of having a step like this on camera.
+say("""## The fix
+
+`store.Get` already returns a typed `ErrNotFound`. `getNote` never checks for
+it, so every miss falls through to the generic 500 branch.
+
+| File | Change |
+|---|---|
+| `internal/http/handler.go` | Map `ErrNotFound` to **404** |
+| `internal/http/router.go` | Register `/notes/{id}` |
+| `internal/http/handler_test.go` | Cover the missing-note path |
+
+1. Check the typed error in `getNote`, before the generic 500
+2. Add a failing test for a note that does not exist
+3. Register the route that test calls, then re-run
+
+The store's own error text stays as it is — *that* is a separate change.""")
 
 tool("t3", "Edit", {"file_path": f"{CWD}/internal/http/handler.go"})
 result("t3", {"filePath": f"{CWD}/internal/http/handler.go", "structuredPatch": [
