@@ -320,7 +320,12 @@ func DescribeEvent(e Event, cwd string) string {
 		return collapseSpaces(stripPromptTags(e.UserText))
 
 	case EventText:
-		return collapseSpaces(e.Text)
+		// NOT collapsed. This is the agent's own prose and it is markdown —
+		// headings, bullets, tables, fenced code. collapseSpaces is
+		// strings.Fields joined by a space, so it deleted every newline and
+		// ran the whole block together into one paragraph. renderMarkdown
+		// lays it out; the only thing to do here is not destroy it first.
+		return strings.TrimSpace(e.Text)
 
 	case EventThinking:
 		return collapseSpaces(e.Thinking)

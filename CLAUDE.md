@@ -227,6 +227,48 @@ unrelated work. `GroupSubagents` then pulls each subagent under its parent.
 - **The header carries the position**, not just a status message: the message
   clears after a few seconds and then nothing on screen says whose work it is.
 
+## Rendering a plan's markdown
+
+`renderMarkdown` in `internal/ui/markdown.go` lays out a `StepPlan`'s text.
+Nothing else goes through it: every other `Detail` is a sentence
+`DescribeEvent` built, and a markdown parser can only misread generated prose.
+
+- **`collapseSpaces` was the bug.** It is `strings.Fields` joined by a space,
+  so it deleted every newline in the block — a heading, its list and a table
+  ran together into one paragraph. `DescribeEvent` now returns an `EventText`
+  body untouched; the renderer is what shapes it.
+- **Consecutive lines are ONE paragraph.** That is markdown, and it is also
+  what `wrapProse` gets backwards in the other direction: it treats every
+  newline as a paragraph break, so a soft-wrapped sentence came out as a column
+  of short lines.
+- **The viewport must not follow a step that types nothing.** `renderReplay`
+  jumps to the bottom while `typed >= 0` so a diff arrives on screen. A plan
+  types nothing, so a long one opened at its LAST line until the follow was
+  gated on `TypedLength(step, sess) > 0`.
+- **Underscores are never emphasis**, and an asterisk only opens it at a word
+  boundary with no space after, closing on one with no space before. That is
+  what keeps `snake_case`, `rm *.go *.md` and `2*3*4` literal. Getting it wrong
+  deletes characters from a command the reader is meant to be able to retype.
+- **One style per line, or none.** A heading and a table's header strip their
+  inline markers and apply a single style; nesting lipgloss styles ends the
+  outer colour at the first inner reset and the rest of the line loses it. Code
+  inside bold (24% of blocks) needs its own style rather than nesting.
+- **Every glyph is measured.** `╌` U+254C, `▐` U+2590, `▪` U+25AA, `◦` U+25E6
+  and `‣` U+2023 are all width 1 and non-ambiguous; `•`, `·`, `─` and `│` are
+  ambiguous and are not used here. `TestMarkdownGlyphsAreNotAmbiguousWidth`
+  enforces it with `runewidth`, which is why that module is a direct
+  dependency.
+- **Tables have no vertical rules.** Two spaces and a bold header read as a
+  table, and every box-drawing glyph that would draw the rules is
+  ambiguous-width. A header of empty cells gets no bold row and no divider —
+  the pipes were there to align two columns, not to label them.
+- **Nothing is clamped on the way out.** The width contract is `wrapProse`'s —
+  prefix plus at most `maxWidth` — and a blind truncate at the end would make
+  `TestMarkdownFitsItsWidth` pass while the producers stayed broken.
+  `clampWidth` in `Model.View` is still the net.
+- Costs about 1ms for a real plan and 4.6ms for a 60KB one, against a 30ms
+  tick, so there is no cache. `highlightCode` already caches the fenced blocks.
+
 ## The path and branch line
 
 `contextLine` draws the session's directory and branch under the replay's
