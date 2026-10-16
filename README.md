@@ -53,6 +53,13 @@ the work happened in and the branch it was on — `~/workspace/proj  ⎇ main`.
 
 ![replay](docs/img/replay.png)
 
+**A plan is rendered, not flattened.** An agent writes markdown, so a `PLAN`
+step gets its heading, its table, its numbered list and its `code` and **bold**
+laid out — rather than every newline deleted and the whole thing run together
+into one paragraph.
+
+![plan](docs/img/plan.png)
+
 **The tree** (`T`) sits beside it and scrolls itself to whatever is being
 changed — new files green, changed orange, removed red, untouched dim.
 

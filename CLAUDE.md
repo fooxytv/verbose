@@ -352,3 +352,15 @@ python3 docs/demo-data.py && vhs docs/demo.tape
 ```
 
 `verbose` honours `$HOME`, which is what makes the synthetic tree possible.
+
+**The tape navigates by counting rows, and nothing tells it when that count is
+wrong.** Grouping subagents put an extra row under the parent, so the five
+`Down`s that used to reach the session that did the work started landing on its
+agent instead — the recording still produced five perfectly good screenshots of
+the wrong run. Check the frames after any change to the list or the replay,
+and prefer an addressed jump (`/` then a step number) over waiting a fixed
+number of seconds for playback to arrive somewhere.
+
+The step a screenshot wants is worth naming in a comment: `docs/img/plan.png`
+is step 5 because that is the first markdown plan, and a step inserted before
+it moves the target silently.
