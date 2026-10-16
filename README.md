@@ -242,6 +242,27 @@ output is not.
 Pausing or scrolling hands control back to you and reveals the whole step at
 once, because stopping to look means you want to read it, not watch it.
 
+### Reading a plan
+
+A `PLAN` step is the agent's own prose, and an agent writes markdown. Across one
+machine's 2327 assistant text blocks, 53% carry inline code, 34% bold, 17% a
+heading, 15% a fenced code block, 11% bullets and 10% a table — and a third of
+them are more than one line.
+
+Those blocks are **rendered**: headings in colour, bullets and numbered lists
+with their text hanging under themselves, tables in aligned columns, fenced code
+syntax highlighted the same way a diff is, and `code`, **bold** and *emphasis*
+shown as themselves rather than as asterisks and backticks.
+
+Before this they were flattened. Every newline was deleted, so a heading, the
+list under it and a table all ran together into one unbroken paragraph.
+
+Markdown's own rules apply: lines broken in the source are re-flowed into one
+paragraph, so a plan wraps to your terminal rather than to the width the agent
+happened to write it at. Shell text is left alone — `rm *.go *.md`,
+`snake_case_names` and `2*3*4` are not emphasis, and a plan that reads like a
+command is still one you can retype.
+
 ### Finding the code
 
 Most of what an agent does is not writing code. Across one machine's

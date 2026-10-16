@@ -162,7 +162,12 @@ func renderReplay(v replayView) string {
 	// While typing, the viewport follows the cursor. Without this the window
 	// stays at the top of the diff and the code arrives off-screen, which is
 	// the one thing this view exists to prevent.
-	if typed >= 0 {
+	//
+	// Only when there is a cursor to follow. A prose step types nothing, so
+	// following it would open a long plan at its LAST line — which is what
+	// happened the moment plans stopped being collapsed to one paragraph and
+	// started being several screens of markdown.
+	if typed >= 0 && TypedLength(step, sess) > 0 {
 		scroll = max(0, len(body)-visible)
 	}
 	if scroll > max(0, len(body)-visible) {
@@ -274,13 +279,26 @@ func replayHeadline(step session.ReplayStep, sess *session.Session, width int) s
 	return line
 }
 
+// detailLines draws a step's account of itself.
+//
+// A plan is the only Detail that did not come from this program: it is the
+// agent's own text, and agents write markdown. Everything else is a sentence
+// DescribeEvent built, with no markup in it — running generated prose through
+// a markdown parser can only misread it, so only plans go that way.
+func detailLines(step session.ReplayStep, width int, prefix string) []string {
+	if step.Kind == session.StepPlan {
+		return renderMarkdown(step.Detail, width, prefix)
+	}
+	return wrapProse(step.Detail, width, prefix)
+}
+
 // replayBody is everything below the headline: the plain-English account, the
 // explanation if one exists, and the raw evidence from the transcript.
 func replayBody(step session.ReplayStep, sess *session.Session, width, typed int) []string {
 	var lines []string
 
 	if step.Detail != "" {
-		lines = append(lines, wrapProse(step.Detail, width-6, "  ")...)
+		lines = append(lines, detailLines(step, width-6, "  ")...)
 		lines = append(lines, "")
 	}
 
