@@ -55,8 +55,21 @@ need a rebase has already lost most of the benefit.
 
 `gh` must be acting as the **`fooxytv`** account. Two accounts are configured on
 this machine and the other one is not a collaborator, so `gh pr create` fails
-with `must be a collaborator` — a confusing error for what is only the wrong
-active account. `gh auth switch --hostname github.com --user fooxytv` fixes it.
+with `must be a collaborator` and `gh pr merge` with `does not have the correct
+permissions` — confusing errors for what is only the wrong active account.
+
+**The switch does not persist between shell invocations.** Each command runs in
+a fresh shell, so it has to be in the *same* one as the `gh` call that needs it:
+
+```bash
+gh auth switch --hostname github.com --user fooxytv >/dev/null && gh pr merge 7 --squash
+```
+
+**Never pipe a `gh` command whose exit code matters.** `gh pr merge … | tail -1`
+exits 0 even when the merge was refused. Chaining a tag onto that with `&&`
+tagged a commit that did not carry the version bump — the release then built
+from a tree whose `Makefile` still said the old number. Print `exit=$?` instead,
+or let the command's status stand on its own.
 
 ### Shipping a release
 
