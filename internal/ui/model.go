@@ -745,7 +745,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Normalize space to "enter" so it works as a selection key
-	if msg.Type == tea.KeySpace {
+	if isSpace(msg) {
 		key = "enter"
 	}
 
@@ -1444,4 +1444,11 @@ func (m Model) handleSearchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		m.searchDraft += string(msg.Runes)
 	}
 	return m, nil
+}
+
+// isSpace reports a press of the space bar. bubbletea decodes it as KeySpace on
+// unix but as KeyRunes{' '} on Windows, so matching the type alone left every
+// space binding dead there. Both stringify to " ".
+func isSpace(msg tea.KeyMsg) bool {
+	return msg.String() == " "
 }
