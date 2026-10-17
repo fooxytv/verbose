@@ -221,7 +221,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case resumeDoneMsg:
-		// In-place resume finished — TUI resumes automatically via tea.ExecProcess
+		// In-place resume finished — TUI resumes automatically via tea.ExecProcess.
+		// A CLI that could not be started at all lands here too, and must say so
+		// rather than return to the screen as if nothing had been pressed.
+		if msg.err != nil {
+			m.statusMsg = "The CLI did not run: " + msg.err.Error()
+			return m, clearStatusAfter()
+		}
 		return m, nil
 
 	case yankDoneMsg:
@@ -961,6 +967,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if info != nil {
+			if why := missingCWD(info.CWD); why != "" {
+				m.statusMsg = why
+				return m, clearStatusAfter()
+			}
 			return m, resumeSessionCmd(info.ID, info.CWD)
 		}
 
@@ -985,6 +995,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if info != nil {
+			if why := missingCWD(info.CWD); why != "" {
+				m.statusMsg = why
+				return m, clearStatusAfter()
+			}
 			return m, newSessionCmd(info.Source, info.CWD)
 		}
 
@@ -1034,6 +1048,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if info != nil && sess != nil {
+			if why := missingCWD(info.CWD); why != "" {
+				m.statusMsg = why
+				return m, clearStatusAfter()
+			}
 			if prompt := lastUserPrompt(sess); prompt != "" {
 				return m, forkSessionCmd(info.Source, info.CWD, prompt)
 			}

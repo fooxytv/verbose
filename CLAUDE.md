@@ -163,6 +163,27 @@ Verified against real data; each of these cost a bug to learn.
   empty body, so a replay can say what happened and not why.
 - **`cwd` beats the directory name.** The encoded project directory cannot tell
   a path separator from a hyphen.
+- **`claude --resume <id>` works from any folder** (verified on 2.1.302). After
+  a rename it resumes the same conversation, appends to the original file under
+  the OLD project directory, and records the new `cwd` on the lines it adds.
+  So a renamed folder needs nothing moved; only verbose's reading of the paths
+  is stale, which is what `verbose relink` fixes.
+
+## Relinking a renamed folder
+
+`verbose relink` keeps old → new links in `~/.config/verbose/relinks.json`;
+`Relinks.Apply` rewrites a session's paths as the store loads it, in
+`load`, `reload` and both OpenCode paths. Nothing downstream knows links exist.
+
+- **Never edit the transcripts.** They are Claude Code's, and it does not need
+  them changed (above).
+- **Match whole path segments.** `C:\work\app` must not rewrite
+  `C:\work\app-old`; `replacePathPrefix` checks the next character cannot
+  continue a name. Windows also needs the forward-slash spelling a shell
+  command uses, and case-insensitive matching.
+- **Enter is only a default with evidence**: at least half the files the
+  sessions touched must exist here. Run from the wrong folder, one shared
+  README made an unrelated folder the default at 1 of 9.
 
 ## Rendering rules — all of these were bugs
 
