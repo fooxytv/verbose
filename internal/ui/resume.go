@@ -152,6 +152,22 @@ func launchInPlace(cli string, args []string, cwd string) tea.Cmd {
 	})
 }
 
+// missingCWD explains why a session cannot be launched in cwd, or returns empty
+// when it can. A folder renamed or moved since the session ran leaves a cwd
+// that no longer exists, and starting a process there fails before the CLI
+// runs at all — on Windows that failure used to be the only sign, and it was
+// dropped. An empty cwd is not missing: it launches where verbose was started.
+func missingCWD(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	if info, err := os.Stat(cwd); err == nil && info.IsDir() {
+		return ""
+	}
+	return "The folder this session ran in no longer exists. If it was renamed " +
+		"or moved, run `verbose relink` in its new location. Was: " + cwd
+}
+
 // resumeStartedMsg is sent when a session was launched in a new tab/pane.
 type resumeStartedMsg struct {
 	newTab bool

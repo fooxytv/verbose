@@ -22,6 +22,10 @@ type Store struct {
 
 	ocDBs      map[string]time.Time // tracked OpenCode DBs: path → last mtime
 	ocExtraDBs []string             // explicitly specified OpenCode DB paths
+
+	// relinks rewrite the paths of sessions whose folder was renamed or moved,
+	// applied as each one loads. See relink.go.
+	relinks Relinks
 }
 
 // NewStore creates a session store that scans ~/.claude/projects/.
@@ -44,6 +48,9 @@ func NewStore() (*Store, error) {
 		updates:  make(chan struct{}, 1),
 		ocDBs:    make(map[string]time.Time),
 	}
+	// A broken links file must not stop verbose opening: the sessions are
+	// still readable, only with their recorded paths.
+	s.relinks, _ = LoadRelinks()
 
 	return s, nil
 }
@@ -261,6 +268,7 @@ func (s *Store) reload(path string) {
 	if err != nil || len(sess.Events) == 0 {
 		return
 	}
+	s.relinks.Apply(sess)
 
 	s.mu.Lock()
 	s.sessions[sess.Info.ID] = sess
@@ -281,6 +289,7 @@ func (s *Store) reload(path string) {
 	// from disk, the subagent still stands on its own.
 	if parentPath != path {
 		if parent, err := ParseSessionFile(parentPath); err == nil && len(parent.Events) > 0 {
+			s.relinks.Apply(parent)
 			s.mu.Lock()
 			s.sessions[parent.Info.ID] = parent
 			s.mu.Unlock()
@@ -303,6 +312,7 @@ func (s *Store) load(path string) {
 	if err != nil || len(sess.Events) == 0 {
 		return
 	}
+	s.relinks.Apply(sess)
 	s.mu.Lock()
 	s.sessions[sess.Info.ID] = sess
 	s.mu.Unlock()
@@ -349,6 +359,7 @@ func (s *Store) scanOpenCodeDBs() {
 		s.mu.Lock()
 		s.ocDBs[dbPath] = info.ModTime()
 		for _, sess := range sessions {
+			s.relinks.Apply(sess)
 			s.sessions[sess.Info.ID] = sess
 		}
 		s.mu.Unlock()
@@ -465,6 +476,7 @@ func (s *Store) watchOpenCode() {
 			s.mu.Lock()
 			s.ocDBs[dbPath] = info.ModTime()
 			for _, sess := range sessions {
+				s.relinks.Apply(sess)
 				s.sessions[sess.Info.ID] = sess
 			}
 			s.mu.Unlock()

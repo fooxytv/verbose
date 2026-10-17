@@ -545,6 +545,44 @@ A subagent's own transcript cannot be replied to — open its parent session —
 and neither can one that recorded no working directory, since there would be
 nowhere to start the CLI. The panel says so rather than failing quietly.
 
+### After renaming or moving a folder
+
+A transcript records the folder it ran in by its full path, so renaming the
+folder leaves its sessions pointing at nothing: the CLI cannot be started there,
+and the tree has no files to show. Run `verbose relink` in the folder's new
+location:
+
+```
+$ cd ~/work/new-name
+$ verbose relink
+Folders that no longer exist, best match first:
+  1. /Users/me/work/old-name
+     3 sessions · last active 2d ago · 12 of 14 files found here
+  2. /Users/me/scratch
+     1 session · last active 3w ago · 0 of 2 files found here
+
+Relink which to /Users/me/work/new-name? [1]
+```
+
+There is no need to remember the old name. Verbose lists every folder its
+sessions ran in that no longer exists, and ranks them by how many of the files
+those sessions touched are sitting in the current folder. A renamed folder keeps
+its contents, so the right one is normally first. Enter only picks it when at
+least half of its files are found; otherwise, choose by number.
+
+```bash
+verbose relink old-name        # skip the list: a folder's name or full path
+verbose relink -y              # take the best match without asking
+verbose relink -list           # what has been relinked
+verbose relink -remove <old>   # undo one
+```
+
+The transcripts are not changed. The link is kept in
+`~/.config/verbose/relinks.json` and applied as verbose reads each session, so
+continuing, the tree, diffs and `e` all use the new location. Restart verbose
+if it was already open. Claude Code needs no help with this, because
+`claude --resume <id>` finds a session from any folder.
+
 ## How it works
 
 Claude Code stores session transcripts as `.jsonl` files in `~/.claude/projects/<project>/`.

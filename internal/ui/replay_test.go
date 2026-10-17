@@ -2038,7 +2038,7 @@ func TestLastAssistantText(t *testing.T) {
 }
 
 func TestContinueUnsupportedExplainsItself(t *testing.T) {
-	ok := &session.Session{Info: session.SessionInfo{ID: "a", CWD: "/repo"}}
+	ok := &session.Session{Info: session.SessionInfo{ID: "a", CWD: t.TempDir()}}
 	if got := continueUnsupported(ok); got != "" {
 		t.Errorf("a normal session = %q, want it supported", got)
 	}
@@ -2049,6 +2049,26 @@ func TestContinueUnsupportedExplainsItself(t *testing.T) {
 	noCWD := &session.Session{Info: session.SessionInfo{ID: "a"}}
 	if got := continueUnsupported(noCWD); !strings.Contains(got, "working directory") {
 		t.Errorf("no cwd = %q, want it to say why", got)
+	}
+}
+
+// A folder renamed since the session ran: the recorded cwd is gone, and
+// launching there failed silently on Windows. The panel must say so instead.
+func TestContinueExplainsARenamedFolder(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "renamed-away")
+	sess := &session.Session{Info: session.SessionInfo{ID: "a", CWD: gone}}
+	got := continueUnsupported(sess)
+	if !strings.Contains(got, "no longer exists") || !strings.Contains(got, gone) {
+		t.Errorf("missing cwd = %q, want it to say the folder is gone and name it", got)
+	}
+
+	m := Model{mode: viewDetail, selectedSession: sess}
+	res, cmd := m.handleKey(runeKey("c"))
+	if got := res.(Model).statusMsg; !strings.Contains(got, "no longer exists") {
+		t.Errorf("c on a missing folder: status = %q, want the reason", got)
+	}
+	if cmd == nil {
+		t.Error("c on a missing folder should still schedule the status to clear")
 	}
 }
 

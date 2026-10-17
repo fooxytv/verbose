@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fooxytv/verbose/internal/jsonout"
+	"github.com/fooxytv/verbose/internal/relink"
 	"github.com/fooxytv/verbose/internal/ui"
 	"github.com/fooxytv/verbose/pkg/session"
 )
@@ -22,6 +23,11 @@ func main() {
 			fmt.Println("verbose " + version)
 			os.Exit(0)
 		}
+	}
+
+	// Subcommands come before the flags, which belong to the UI.
+	if len(os.Args) > 1 && os.Args[1] == "relink" {
+		os.Exit(runRelink(os.Args[2:]))
 	}
 
 	project := flag.String("project", "", "filter to a specific project name")
@@ -74,4 +80,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runRelink scans the sessions, then hands them to `verbose relink` along with
+// the folder it was run in.
+func runRelink(args []string) int {
+	here, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	store, err := session.NewStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing store: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+	if err := store.Scan(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to scan sessions: %v\n", err)
+	}
+	return relink.Run(args, os.Stdin, os.Stdout, os.Stderr, store.GetSessions(), here)
 }

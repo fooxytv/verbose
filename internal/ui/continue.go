@@ -164,7 +164,7 @@ func continueUnsupported(sess *session.Session) string {
 		return "This session records no working directory, so the CLI cannot be " +
 			"started in the right place."
 	}
-	return ""
+	return missingCWD(sess.Info.CWD)
 }
 
 // openContinue opens the panel for the session on screen.
