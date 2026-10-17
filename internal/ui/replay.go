@@ -905,7 +905,7 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 
 	// Space is normalised to "enter" for selection elsewhere; here it is the
 	// play/pause control, so it has to be caught before that mapping applies.
-	if msg.Type == tea.KeySpace || key == "enter" {
+	if isSpace(msg) || key == "enter" {
 		m.replayPlaying = !m.replayPlaying
 		m.replayGen++
 		if !m.replayPlaying {

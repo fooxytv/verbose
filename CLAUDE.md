@@ -187,13 +187,17 @@ repaint.
   (which expands tabs), not `visibleLen`, or they will pass while the screen
   breaks.
 
-## Keybindings on macOS
+## Keybindings across platforms
 
 **Never bind ctrl+arrow.** macOS takes all four for Mission Control,
 Application Windows and Spaces, so the terminal never sees them — a binding
 there is silently dead. Prefer bare characters (`[` `]` `{` `}`); they have no
 modifier to intercept. Verifying that bubbletea *decodes* a sequence is not
 verifying that anything *sends* it.
+
+**Never match space by `msg.Type == tea.KeySpace`.** bubbletea decodes the
+space bar as `KeySpace` on unix but as `KeyRunes{' '}` on Windows, so every
+space binding was dead there while working on macOS. Use `isSpace(msg)`.
 
 ## Grouping subagents in the list
 

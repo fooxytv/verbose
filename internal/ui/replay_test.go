@@ -2263,3 +2263,24 @@ func TestTreePicksUpNewWorkOnAStoreUpdate(t *testing.T) {
 		t.Error("a refresh must not forget which directories were closed")
 	}
 }
+
+// On Windows bubbletea delivers the space bar as KeyRunes{' '}, not KeySpace,
+// and play/pause was dead there while it worked on macOS.
+func TestWindowsSpacePlaysReplayAndTree(t *testing.T) {
+	windowsSpace := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+
+	m := treeModel(t)
+	m.mode = viewReplay
+	m.replayPlaying = false
+	res, _ := m.handleReplayKey(windowsSpace, windowsSpace.String())
+	if !res.(Model).replayPlaying {
+		t.Error("a Windows space should start the replay")
+	}
+
+	m = treeModel(t)
+	m.replayPlaying = false
+	res, _ = m.handleTreeKey(windowsSpace, windowsSpace.String())
+	if !res.(Model).replayPlaying {
+		t.Error("a Windows space should start the replay from the tree")
+	}
+}

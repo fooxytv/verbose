@@ -586,7 +586,7 @@ func (m Model) handleTreeKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 
 	// Space plays and pauses the replay that drives the tree, so the project
 	// can be watched changing without leaving this view.
-	if msg.Type == tea.KeySpace {
+	if isSpace(msg) {
 		m.replayPlaying = !m.replayPlaying
 		m.replayGen++
 		m.treeGen++
@@ -1051,7 +1051,7 @@ func (m Model) handleDiffKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 	// the replay have the key. Swallowing them left the panel open, the replay
 	// paused and the tree frozen, with pressing play appearing to do nothing
 	// at all.
-	if msg.Type == tea.KeySpace || key == "right" || key == "left" {
+	if isSpace(msg) || key == "right" || key == "left" {
 		m.closeDiff()
 		if m.mode == viewTree {
 			return m.handleTreeKey(msg, key)
