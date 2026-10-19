@@ -151,8 +151,14 @@ type Model struct {
 	// Timeline filter and search
 	eventFilter  eventFilter
 	searchQuery  string
-	searchTyping bool   // capturing keystrokes into searchQuery
-	searchDraft  string // query being typed, committed on enter
+	searchTyping bool // capturing keystrokes into searchQuery
+
+	// The same prompt, applied to the LIST rather than to one timeline:
+	// listQuery narrows the sessions shown and listMatches says why each one
+	// survived, keyed by session id.
+	listQuery   string
+	listMatches map[string]session.Match
+	searchDraft string // query being typed, committed on enter
 
 	version string
 }
@@ -333,12 +339,19 @@ func (m Model) View() string {
 
 	switch m.mode {
 	case viewSessions:
-		content = renderSessionsList(m.sessions, m.cursor, m.width, m.height)
+		content = renderSessionsList(m.sessions, m.listMatches, m.listQuery,
+			m.cursor, m.width, m.height)
+		if m.searchTyping {
+			help = searchPromptStyle.Render(" search all sessions ") + " " + m.searchDraft +
+				mutedStyle.Render("█   enter to apply · esc to cancel")
+			break
+		}
 		// Ordered by how much a reader needs it: the footer drops from the end
 		// on a narrow terminal, so anything that must stay visible comes first.
 		helpKeys = []helpKey{
 			{"↑/↓", "move"},
 			{"enter", "open"},
+			{"/", "search all"},
 			{"R", "replay"},
 			{"T", "tree"},
 			{"s", "summary"},
@@ -768,6 +781,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "esc", "left":
 		switch m.mode {
+		case viewSessions:
+			// A search narrows what the list shows, so leaving it is what esc
+			// means here — there is nowhere above the list to go back to.
+			if m.listQuery != "" {
+				m.listQuery = ""
+				m.cursor = 0
+				m.refreshSessions()
+				return m, nil
+			}
 		case viewDetail:
 			m.mode = viewSessions
 			m.selectedSession = nil
@@ -877,6 +899,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.detailCursor = max(0, len(sess.Events)-1)
 					m.autoFollow = true
 					m.mode = viewDetail
+
+					// Opened out of a search: carry the query in, so the
+					// timeline lands on the hit rather than at the end of a
+					// session you then have to search again by hand.
+					if mt, ok := m.listMatches[info.ID]; ok && m.listQuery != "" {
+						m.searchQuery = m.listQuery
+						m.autoFollow = false
+						m.detailCursor = 0
+						if mt.EventIndex >= 0 {
+							m.pointAtEvent(mt.EventIndex)
+						}
+						m.clampDetailCursor()
+					}
 				}
 			}
 		case viewDetail:
@@ -1084,9 +1119,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "/":
-		if m.mode == viewDetail {
+		switch m.mode {
+		case viewDetail:
 			m.searchTyping = true
 			m.searchDraft = m.searchQuery
+		case viewSessions:
+			// The same prompt, over every session rather than one timeline.
+			m.searchTyping = true
+			m.searchDraft = m.listQuery
 		}
 
 	case "N":
@@ -1244,6 +1284,25 @@ func (m Model) pageSize() int {
 
 func (m *Model) refreshSessions() {
 	sessions := m.store.GetSessions()
+
+	// A search narrows the list in place: the order is left alone, so a
+	// result sits where the session always sat and a subagent still follows
+	// the parent it belongs to when both matched.
+	if m.listQuery != "" {
+		m.listMatches = make(map[string]session.Match)
+		for _, mt := range m.store.Search(m.listQuery) {
+			m.listMatches[mt.SessionID] = mt
+		}
+		var matched []session.SessionInfo
+		for _, s := range sessions {
+			if _, ok := m.listMatches[s.ID]; ok {
+				matched = append(matched, s)
+			}
+		}
+		sessions = matched
+	} else {
+		m.listMatches = nil
+	}
 
 	if m.projectFilter != "" {
 		var filtered []session.SessionInfo
@@ -1449,6 +1508,19 @@ func (m Model) handleSearchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		return m, nil
 
 	case "enter":
+		if m.mode == viewSessions {
+			m.listQuery = strings.TrimSpace(m.searchDraft)
+			m.searchTyping = false
+			m.cursor = 0
+			m.refreshSessions()
+			if m.listQuery != "" && len(m.sessions) == 0 {
+				m.statusMsg = fmt.Sprintf("Nothing matches %q", m.listQuery)
+				m.listQuery = ""
+				m.refreshSessions()
+				return m, clearStatusAfter()
+			}
+			return m, nil
+		}
 		m.searchQuery = strings.TrimSpace(m.searchDraft)
 		m.searchTyping = false
 		m.autoFollow = false

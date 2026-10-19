@@ -56,6 +56,13 @@ instead of rows scattered by timestamp.
 
 ![sessions](docs/img/sessions.png)
 
+**Search every session, not just the titles** (`/`). The list shows what a
+session was about; it cannot show what was *in* it, and most of a history is
+older than the week you remember. A search reaches prompts, replies, file
+paths and commands, says which of those matched each row, and carries the
+query into the timeline so the session opens on the hit. There is no index —
+scanning 18,000 events takes 12ms, well inside a frame.
+
 **A project is a directory**, and more than one agent can work in it — so the
 project view (`p`) marks which ones did, and counts the sessions each
 contributed.
@@ -226,6 +233,7 @@ In the session list Claude Code sessions are marked `●`, Codex `✦`, OpenCode
 | `g` / `Home` | Jump to top |
 | `G` / `End` | Jump to bottom |
 | `PgUp` / `PgDn` | Page up / down |
+| `/` | Search **every** session — prompts, replies, files and commands, not just titles |
 | `d` | Delete session (asks to confirm) |
 | `s` | Toggle session summary |
 | `R` | Replay the session step by step |

@@ -3,9 +3,12 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mattn/go-runewidth"
 
@@ -219,5 +222,190 @@ func TestSummaryNamesTheAgent(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("source %q: the summary does not say %q", source, want)
 		}
+	}
+}
+
+// searchFixture builds an isolated home with three sessions whose differences
+// are what a search has to find: one by its title, one only by something in a
+// prompt, one only by a file it touched.
+func searchListFixture(t *testing.T) Model {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	// Keep the real OpenCode database out of an isolated test.
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+
+	write := func(id string, lines ...string) {
+		p := filepath.Join(home, ".claude", "projects", "-repo", id+".jsonl")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user := func(ts, text string) string {
+		return `{"type":"user","uuid":"u","timestamp":"` + ts + `","cwd":"/repo",` +
+			`"message":{"role":"user","content":"` + text + `"}}`
+	}
+	tool := func(ts, path string) string {
+		return `{"type":"assistant","uuid":"a","timestamp":"` + ts + `","cwd":"/repo",` +
+			`"message":{"id":"m","role":"assistant","content":[{"type":"tool_use","id":"t1",` +
+			`"name":"Read","input":{"file_path":"` + path + `"}}]}}`
+	}
+
+	write("aaa", user("2026-01-03T10:00:00.000Z", "Cap the retry backoff"))
+	// A Claude session's title IS its first prompt, so a needle in the first
+	// prompt matches as a title. For a "prompt" match the needle has to be in
+	// a LATER one — which is also the case a search exists for: the thing you
+	// asked for half way through a session you labelled something else.
+	write("bbb", user("2026-01-02T10:00:00.000Z", "Something else entirely"),
+		user("2026-01-02T10:05:00.000Z", "while here, cap the backoff too"))
+	write("ccc", user("2026-01-01T10:00:00.000Z", "Unrelated work"),
+		tool("2026-01-01T10:01:00.000Z", "/repo/backoff.go"))
+
+	store, err := session.NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	m := Model{store: store, width: 160, height: 40, version: "0.0.0", mode: viewSessions}
+	m.refreshSessions()
+	if len(m.sessions) != 3 {
+		t.Fatalf("fixture has %d sessions, want 3", len(m.sessions))
+	}
+	return m
+}
+
+// The list is the only place a session can be found, and before this it could
+// only be found by its label. Searching reaches what was IN it.
+func TestListSearchNarrowsTheListAndEscapeRestoresIt(t *testing.T) {
+	m := searchListFixture(t)
+
+	res, _ := m.handleKey(runeKey("/"))
+	m = res.(Model)
+	if !m.searchTyping {
+		t.Fatal("/ did not open the search prompt in the list")
+	}
+	for _, r := range "backoff" {
+		res, _ = m.handleKey(runeKey(string(r)))
+		m = res.(Model)
+	}
+	res, _ = m.handleKey(namedKey(tea.KeyEnter))
+	m = res.(Model)
+
+	if m.listQuery != "backoff" {
+		t.Fatalf("listQuery = %q", m.listQuery)
+	}
+	if len(m.sessions) != 3 {
+		t.Fatalf("matched %d sessions, want all three — by title, prompt and file",
+			len(m.sessions))
+	}
+	kinds := map[string]bool{}
+	for _, mt := range m.listMatches {
+		kinds[mt.Kind] = true
+	}
+	for _, want := range []string{"title", "prompt", "file"} {
+		if !kinds[want] {
+			t.Errorf("nothing matched on its %s: %v", want, kinds)
+		}
+	}
+
+	// And something that matches one session only.
+	m.listQuery = "entirely"
+	m.refreshSessions()
+	if len(m.sessions) != 1 {
+		t.Fatalf("matched %d sessions, want 1", len(m.sessions))
+	}
+
+	res, _ = m.handleKey(namedKey(tea.KeyEsc))
+	m = res.(Model)
+	if m.listQuery != "" || len(m.sessions) != 3 {
+		t.Errorf("esc left query %q and %d sessions", m.listQuery, len(m.sessions))
+	}
+}
+
+// A result list has to say why each row is in it, or it is a list of sessions
+// with no stated reason for being there.
+func TestListSearchRowSaysWhatMatched(t *testing.T) {
+	m := searchListFixture(t)
+	m.listQuery = "backoff"
+	m.refreshSessions()
+
+	out := stripAnsi(renderSessionsList(m.sessions, m.listMatches, m.listQuery, 0, 160, 40))
+	if !strings.Contains(out, "prompt:") {
+		t.Errorf("a session that matched on its prompt does not say so:\n%s", out)
+	}
+	if !strings.Contains(out, "file:") {
+		t.Errorf("a session that matched on a file does not say so:\n%s", out)
+	}
+	// The query is on screen, because a narrowed list that does not say it is
+	// narrowed looks like a session list that has lost sessions.
+	if !strings.Contains(out, "backoff") {
+		t.Error("the header does not show the query")
+	}
+}
+
+// Opening a result carries the query in, so the timeline lands on the hit
+// rather than at the end of a session you then have to search again by hand.
+func TestOpeningASearchResultLandsOnTheHit(t *testing.T) {
+	m := searchListFixture(t)
+	m.listQuery = "entirely"
+	m.refreshSessions()
+	if len(m.sessions) != 1 {
+		t.Fatalf("expected one match, got %d", len(m.sessions))
+	}
+
+	res, _ := m.handleKey(namedKey(tea.KeyEnter))
+	opened := res.(Model)
+
+	if opened.mode != viewDetail {
+		t.Fatal("enter did not open the session")
+	}
+	if opened.searchQuery != "entirely" {
+		t.Errorf("searchQuery = %q, want the list's query carried in", opened.searchQuery)
+	}
+	if opened.autoFollow {
+		t.Error("the timeline is still following the end of the session")
+	}
+	visible := opened.visibleEvents()
+	if len(visible) == 0 {
+		t.Fatal("the timeline filtered everything out")
+	}
+	if opened.detailCursor < 0 || opened.detailCursor >= len(visible) {
+		t.Errorf("cursor %d is outside the %d visible events", opened.detailCursor, len(visible))
+	}
+}
+
+// A query that matches nothing says so and leaves the list alone, rather than
+// showing an empty screen that looks like the sessions have gone.
+func TestListSearchWithNoMatchKeepsTheList(t *testing.T) {
+	m := searchListFixture(t)
+
+	res, _ := m.handleKey(runeKey("/"))
+	m = res.(Model)
+	for _, r := range "zzzznope" {
+		res, _ = m.handleKey(runeKey(string(r)))
+		m = res.(Model)
+	}
+	res, _ = m.handleKey(namedKey(tea.KeyEnter))
+	m = res.(Model)
+
+	if len(m.sessions) != 3 {
+		t.Errorf("a search with no matches left %d sessions on screen", len(m.sessions))
+	}
+	if m.listQuery != "" {
+		t.Errorf("listQuery = %q, want it dropped", m.listQuery)
+	}
+	if !strings.Contains(m.statusMsg, "zzzznope") {
+		t.Errorf("statusMsg = %q, want it to name what did not match", m.statusMsg)
 	}
 }
