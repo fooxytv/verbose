@@ -144,20 +144,7 @@ func renderReplay(v replayView) string {
 
 	body := replayBody(step, sess, width, typed)
 
-	// Rows this frame spends on everything that is not the body: the header,
-	// the progress bar, the headline, their blank lines, and the "more lines"
-	// note. The waiting notice costs three more when it is shown.
-	reserved := 9
-	if ctx != "" {
-		// The context line is one more row the body cannot have. Counting it
-		// only when it is drawn matters: a session with neither a cwd nor a
-		// branch gets the row back rather than a blank gap.
-		reserved++
-	}
-	if v.waiting {
-		reserved += 3
-	}
-	visible := max(1, height-reserved)
+	visible := replayBodyRows(height, ctx != "", v.waiting)
 
 	// While typing, the viewport follows the cursor. Without this the window
 	// stays at the top of the diff and the code arrives off-screen, which is
@@ -193,6 +180,28 @@ func renderReplay(v replayView) string {
 	}
 
 	return clampHeight(b.String(), height-1)
+}
+
+// replayBodyRows is how many rows of the body a frame of this height shows.
+//
+// Everything that is not the body: the header, the progress bar, the headline,
+// their blank lines, and the "more lines" note. The context line is one more
+// when it is drawn — counting it only then matters, because a session with
+// neither a cwd nor a branch gets the row back rather than a blank gap. The
+// waiting notice costs three.
+//
+// It is a function rather than arithmetic inside the renderer because pausing
+// has to arrive at the same number: the position a pause freezes is the one
+// the follow computed, and a disagreement of a single row shifts the frame.
+func replayBodyRows(height int, hasContext, waiting bool) int {
+	reserved := 9
+	if hasContext {
+		reserved++
+	}
+	if waiting {
+		reserved += 3
+	}
+	return max(1, height-reserved)
 }
 
 // clampHeight drops any rows beyond what the view was given.
@@ -910,7 +919,8 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		m.replayGen++
 		if !m.replayPlaying {
 			// Stopping to look means you want the whole step, not a half-typed
-			// one.
+			// one — and you want it still showing the line you stopped on.
+			m.replayScroll = m.replayFreezeScroll()
 			m.replayTyped = -1
 			return m, nil
 		}
@@ -1108,9 +1118,55 @@ func (m *Model) replayTakeOver() {
 	if !m.replayPlaying && m.replayTyped < 0 {
 		return
 	}
+	// From where it is now, not from the top of the step: an arrow pressed on
+	// a following frame means "the line I can see", and ↑ means the one above
+	// it.
+	m.replayScroll = m.replayFreezeScroll()
 	m.replayPlaying = false
 	m.replayTyped = -1
 	m.replayGen++
+}
+
+// replayFreezeScroll is where the viewport actually is at this moment.
+//
+// While a step types, renderReplay overrides the stored scroll to keep the
+// cursor on screen, and does not write the override back — so replayScroll is
+// still 0 from the start of the step. Dropping the override put the frame back
+// at the step's FIRST line: you pause on the output worth reading and it
+// leaves the screen. Adopting the position holds the frame still instead.
+//
+// The lines above the cursor are the same whether the rest is revealed or not,
+// so the same offset keeps the same top line and the revealed remainder
+// arrives below it.
+func (m Model) replayFreezeScroll() int {
+	if m.replayTyped < 0 || m.selectedSession == nil ||
+		m.replayIndex < 0 || m.replayIndex >= len(m.replaySteps) {
+		return m.replayScroll
+	}
+	step := m.replaySteps[m.replayIndex]
+	if TypedLength(step, m.selectedSession) == 0 {
+		// Nothing was following: a plan or a prompt types nothing, and its
+		// scroll is already the reader's own.
+		return m.replayScroll
+	}
+	width, height := m.replayPaneSize()
+	body := replayBody(step, m.selectedSession, width, m.replayTyped)
+	visible := replayBodyRows(height,
+		contextLine(m.selectedSession.Info, usableWidth(width)) != "", m.replayWaiting())
+	return max(0, len(body)-visible)
+}
+
+// replayPaneSize is the size the replay is being drawn at. It is the whole
+// terminal until the tree shares it, and the body's line count depends on the
+// width, so anything reasoning about the viewport has to ask rather than
+// assume m.width.
+func (m Model) replayPaneSize() (int, int) {
+	if m.treeSplit {
+		if side := sidebarWidth(m.width); side > 0 {
+			return usableWidth(m.width) - side - 3, max(1, m.height-1)
+		}
+	}
+	return m.width, m.height
 }
 
 // replayStep moves by n steps, pausing playback: a manual step means you want

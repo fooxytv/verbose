@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -2302,5 +2303,108 @@ func TestWindowsSpacePlaysReplayAndTree(t *testing.T) {
 	res, _ = m.handleTreeKey(windowsSpace, windowsSpace.String())
 	if !res.(Model).replayPlaying {
 		t.Error("a Windows space should start the replay from the tree")
+	}
+}
+
+// typingModel is a replay stopped mid-write, with the viewport following the
+// cursor: a two-hundred-line file, a hundred and twenty lines of it typed. Each
+// code line is exactly 33 runes, so the typing budget lands on a line boundary
+// and the lines on screen can be named.
+func typingModel(t *testing.T) Model {
+	t.Helper()
+	var code strings.Builder
+	for i := 1; i <= 200; i++ {
+		code.WriteString(fmt.Sprintf("// line %03d  %s\n", i, strings.Repeat("x", 20)))
+	}
+	sess := &session.Session{
+		Info: session.SessionInfo{ID: "t1", Title: "typing", CWD: "/repo"},
+		Events: []session.Event{{
+			Type:     session.EventToolUse,
+			ToolName: "Write",
+			ToolInput: map[string]interface{}{
+				"file_path": "/repo/main.go", "content": code.String(),
+			},
+			Result: &session.ToolResult{FilePath: "/repo/main.go"},
+		}},
+	}
+	m := Model{mode: viewReplay, version: "0.0.0", selectedSession: sess}
+	m.replaySteps = session.BuildReplay(sess)
+	if len(m.replaySteps) != 1 {
+		t.Fatalf("fixture built %d steps, want 1", len(m.replaySteps))
+	}
+	m.width, m.height = 100, 24
+	m.replayPlaying = true
+	m.replayTyped = 120 * 33 // 120 whole lines
+	if n := m.replayTypedLength(); n != 200*33 {
+		t.Fatalf("typed length = %d, want %d", n, 200*33)
+	}
+	return m
+}
+
+// codeRowsOn names the code lines a frame is showing, in order.
+func codeRowsOn(frame string) []string {
+	var out []string
+	for _, row := range visibleLines(stripAnsi(frame)) {
+		if i := strings.Index(row, "// line "); i >= 0 && len(row) >= i+11 {
+			out = append(out, row[i:i+11])
+		}
+	}
+	return out
+}
+
+// Pausing has to hold the frame still. While a step types, the viewport follows
+// the cursor by overriding the stored scroll — which was still 0 from the start
+// of the step, so letting go of the override threw the frame back to the FIRST
+// line of the file. You pressed space on the output you wanted to read and it
+// left the screen.
+func TestPausingHoldsTheLineOnScreen(t *testing.T) {
+	m := typingModel(t)
+
+	rows := codeRowsOn(m.View())
+	if len(rows) < 3 {
+		t.Fatalf("the playing frame shows %d code rows, want a screenful", len(rows))
+	}
+	last := rows[len(rows)-1]
+	if last != "// line 120" {
+		t.Fatalf("the frame is not following the cursor: last row is %q", last)
+	}
+
+	res, _ := m.handleKey(namedKey(tea.KeySpace))
+	paused := res.(Model)
+	if paused.replayPlaying {
+		t.Fatal("space should pause")
+	}
+
+	after := codeRowsOn(paused.View())
+	if len(after) == 0 {
+		t.Fatal("the paused frame shows no code at all")
+	}
+	if !slices.Contains(after, last) {
+		t.Errorf("pausing moved the frame: %q was on screen and is gone, showing %q…%q",
+			last, after[0], after[len(after)-1])
+	}
+}
+
+// The same for the arrows and the wheel, which pause by taking over: ↑ means
+// the line above the one being read, not the top of the step.
+func TestScrollingUpFromAFollowingFrameStaysPut(t *testing.T) {
+	m := typingModel(t)
+
+	rows := codeRowsOn(m.View())
+	first := rows[0]
+
+	res, _ := m.handleKey(namedKey(tea.KeyUp))
+	up := res.(Model)
+	if up.replayPlaying {
+		t.Fatal("an arrow should pause")
+	}
+
+	after := codeRowsOn(up.View())
+	if !slices.Contains(after, first) {
+		t.Errorf("↑ jumped away from the frame: %q was the top row, now showing %q…%q",
+			first, after[0], after[len(after)-1])
+	}
+	if after[0] >= first {
+		t.Errorf("↑ showed %q as the top row, want the line above %q", after[0], first)
 	}
 }
