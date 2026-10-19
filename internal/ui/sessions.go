@@ -14,6 +14,9 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 
 	// Header
 	header := headerStyle.Render(fmt.Sprintf(" verbose — Sessions (%d)", len(sessions)))
+	if legend := sourceLegend(sessions); legend != "" {
+		header += "  " + legend
+	}
 	b.WriteString(header)
 	b.WriteString("\n")
 
@@ -104,6 +107,35 @@ func sourceMarker(source string) string {
 		return "▪"
 	}
 	return "●"
+}
+
+// sourceLegend names the markers in the list, with a count each.
+//
+// Only when there is more than one source. The marker column is one glyph wide
+// and nothing else on screen says what a glyph means, so a mixed list needs
+// the key — but a machine running one agent would get a legend that says only
+// what every row already says.
+func sourceLegend(sessions []session.SessionInfo) string {
+	counts := map[string]int{}
+	for _, s := range sessions {
+		src := s.Source
+		if src == "" {
+			src = "claude"
+		}
+		counts[src]++
+	}
+	if len(counts) < 2 {
+		return ""
+	}
+
+	// A fixed order, so the legend does not reshuffle as sessions arrive.
+	var parts []string
+	for _, src := range []string{"claude", "codex", "copilot", "opencode"} {
+		if n := counts[src]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %s %d", sourceMarker(src), src, n))
+		}
+	}
+	return mutedStyle.Render(strings.Join(parts, "  "))
 }
 
 func formatSessionLine(s session.SessionInfo, width int, connector string) string {

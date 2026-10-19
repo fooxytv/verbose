@@ -30,6 +30,8 @@ func renderSessionOverview(sess *session.Session, todos []session.TodoItem, hasP
 	if info.GitBranch != "" {
 		lines = append(lines, fieldLine("Git Branch", toolUseStyle.Render(info.GitBranch)))
 	}
+	lines = append(lines, fieldLine("Agent",
+		sourceMarker(info.Source)+" "+session.AgentName(info.Source)))
 	if info.Model != "" {
 		lines = append(lines, fieldLine("Model", info.Model))
 	}

@@ -171,3 +171,50 @@ func TestOpeningAnotherSessionReloadsTheTree(t *testing.T) {
 		t.Error("the tree is still marking the previous session's file")
 	}
 }
+
+// Nothing on screen says what a marker means, so a list with more than one
+// agent in it needs the key — and a machine running one agent does not, since
+// the legend would only repeat what every row already says.
+func TestSourceLegendOnlyAppearsWhenItSaysSomething(t *testing.T) {
+	claudeOnly := []session.SessionInfo{{ID: "a"}, {ID: "b", Source: "claude"}}
+	if got := sourceLegend(claudeOnly); got != "" {
+		t.Errorf("one source produced a legend: %q", got)
+	}
+
+	mixed := []session.SessionInfo{
+		{ID: "a"}, {ID: "b", Source: "claude"},
+		{ID: "c", Source: "codex"},
+		{ID: "d", Source: "copilot"}, {ID: "e", Source: "copilot"},
+	}
+	legend := stripAnsi(sourceLegend(mixed))
+	for _, want := range []string{"● claude 2", "✦ codex 1", "▪ copilot 2"} {
+		if !strings.Contains(legend, want) {
+			t.Errorf("legend %q is missing %q", legend, want)
+		}
+	}
+	if strings.Contains(legend, "opencode") {
+		t.Errorf("legend names a source that is not in the list: %q", legend)
+	}
+	// A session with no Source is Claude Code, which is what the first one is.
+	if strings.Contains(legend, "claude 1") {
+		t.Errorf("an empty source was not counted as claude: %q", legend)
+	}
+}
+
+// The summary view had no source field at all, so a Codex thread and a Claude
+// session were told apart only by the model line — and Copilot runs Claude
+// models, so even that did not separate them.
+func TestSummaryNamesTheAgent(t *testing.T) {
+	for source, want := range map[string]string{
+		"":        "● Claude",
+		"codex":   "✦ Codex",
+		"copilot": "▪ Copilot",
+	} {
+		sess := &session.Session{Info: session.SessionInfo{
+			ID: "s", Source: source, ProjectName: "p", Model: "claude-haiku-4.5"}}
+		out := stripAnsi(renderSessionOverview(sess, nil, false, 0, 120, 40))
+		if !strings.Contains(out, want) {
+			t.Errorf("source %q: the summary does not say %q", source, want)
+		}
+	}
+}
