@@ -191,12 +191,12 @@ func TestBuildReplayDropsPromptsThatStripToNothing(t *testing.T) {
 // Inside a subagent run the "user" is the agent that dispatched it.
 func TestReplayTitleAttributesSubagentBriefCorrectly(t *testing.T) {
 	own := Event{Type: EventUserPrompt, UserText: "do the thing"}
-	if got := replayTitle(own, ""); got != "You asked" {
+	if got := replayTitle(own, "", "Claude"); got != "You asked" {
 		t.Errorf("own prompt title = %q, want %q", got, "You asked")
 	}
 
 	brief := Event{Type: EventUserPrompt, UserText: "do the thing", IsSidechain: true}
-	if got := replayTitle(brief, ""); got != "The subagent's brief" {
+	if got := replayTitle(brief, "", "Claude"); got != "The subagent's brief" {
 		t.Errorf("subagent prompt title = %q, want %q", got, "The subagent's brief")
 	}
 }

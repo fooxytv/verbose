@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -546,5 +547,136 @@ func TestTotalTokensPrefersTheBreakdown(t *testing.T) {
 	total := SessionInfo{TokensTotal: 4321}
 	if got := total.TotalTokens(); got != 4321 {
 		t.Errorf("TotalTokens = %d, want 4321", got)
+	}
+}
+
+// A project is a DIRECTORY, and more than one agent can work in the same one —
+// on the machine this was written on, one directory holds both OpenCode and
+// Copilot sessions. The project has to report every tool that worked there,
+// and the token total has to include a source that reports no breakdown.
+func TestProjectInfoCountsEverySourceInADirectory(t *testing.T) {
+	const repo = "/fixture-repo-sources"
+
+	cx := codexHome(t, 1,
+		[]map[string]any{{"id": "t1", "cwd": repo, "name": "codex thread",
+			"tokens_used": 4321}},
+		[]map[string]any{
+			cxItemRow("t1", 1, map[string]any{"type": "agentMessage", "text": "a"}),
+		}, nil, nil)
+
+	cp := copilotHome(t,
+		[]map[string]any{{"id": "s1", "cwd": repo, "summary": "copilot session"}},
+		[]map[string]any{{"session_id": "s1", "turn_index": 0, "user_message": "go",
+			"assistant_response": "done"}},
+		nil)
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// No Claude transcripts: this project is only the two synthetic homes.
+	store.baseDir = t.TempDir()
+	store.AddCodexDir(cx)
+	store.AddCopilotDir(cp)
+	if err := store.Scan(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	proj := store.GetProjectInfo(repo)
+	if proj.TotalSessions != 2 {
+		t.Fatalf("TotalSessions = %d, want 2", proj.TotalSessions)
+	}
+	if got := strings.Join(proj.Sources, "+"); got != "codex+copilot" {
+		t.Errorf("Sources = %q, want codex+copilot", got)
+	}
+	if proj.SourceSessions["codex"] != 1 || proj.SourceSessions["copilot"] != 1 {
+		t.Errorf("SourceSessions = %v, want one each", proj.SourceSessions)
+	}
+	// Codex reports a total and no breakdown; it must still reach the project.
+	if got := proj.TotalTokens(); got != 4321 {
+		t.Errorf("TotalTokens = %d, want the Codex thread's 4321", got)
+	}
+}
+
+// The Claude Code parser never sets Source — it is empty on every Claude
+// session on disk — so the project's source set has to read an empty one as
+// Claude. Dropping it instead leaves every Claude-only project reporting no
+// sources at all.
+func TestProjectSourcesCountAnEmptySourceAsClaude(t *testing.T) {
+	const repo = "/fixture-repo-claude"
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	store.baseDir = t.TempDir()
+
+	// Inserted directly: what the Claude parser produces is a session with no
+	// Source, and that is the case under test.
+	store.sessions["plain"] = &Session{Info: SessionInfo{
+		ID: "plain", ProjectDir: repo, ProjectName: "claude-only",
+		InputTokens: 10, OutputTokens: 5,
+	}}
+
+	proj := store.GetProjectInfo(repo)
+	if got := strings.Join(proj.Sources, "+"); got != "claude" {
+		t.Errorf("Sources = %q, want claude", got)
+	}
+	if proj.SourceSessions["claude"] != 1 {
+		t.Errorf("SourceSessions = %v, want claude 1", proj.SourceSessions)
+	}
+	if got := proj.TotalTokens(); got != 15 {
+		t.Errorf("TotalTokens = %d, want 15", got)
+	}
+}
+
+// A breakdown and a reported total add up rather than one winning: only a
+// source with no breakdown sets the reported number, so nothing is counted
+// twice.
+func TestProjectTotalTokensAddsBothKinds(t *testing.T) {
+	empty := ProjectInfo{}
+	if n := empty.TotalTokens(); n != 0 {
+		t.Errorf("an empty project has %d tokens", n)
+	}
+	mixed := ProjectInfo{TotalInputTokens: 10, TotalOutputTokens: 5, TotalTokensReported: 7}
+	if got := mixed.TotalTokens(); got != 22 {
+		t.Errorf("TotalTokens = %d, want 22", got)
+	}
+}
+
+// A step's headline names the agent whose work it is. With four of them
+// reading into one list, "Claude's plan" on a Codex thread names the wrong
+// one — and that headline is what the replay puts on screen.
+func TestReplayTitlesNameTheRightAgent(t *testing.T) {
+	for source, want := range map[string]string{
+		"":         "Claude's plan",
+		"codex":    "Codex's plan",
+		"opencode": "OpenCode's plan",
+		"copilot":  "Copilot's plan",
+	} {
+		sess := &Session{
+			Info: SessionInfo{ID: "s", Source: source, CWD: "/repo"},
+			Events: []Event{
+				{Type: EventUserPrompt, UserText: "do it"},
+				{Type: EventText, Text: "Here is the plan."},
+			},
+		}
+		steps := BuildReplay(sess)
+		if len(steps) != 2 {
+			t.Fatalf("source %q: built %d steps, want 2", source, len(steps))
+		}
+		if steps[1].Title != want {
+			t.Errorf("source %q: title = %q, want %q", source, steps[1].Title, want)
+		}
+	}
+
+	if got := AgentName("codex"); got != "Codex" {
+		t.Errorf("AgentName(codex) = %q", got)
+	}
+	// Claude Code's parser never sets Source.
+	if got := AgentName(""); got != "Claude" {
+		t.Errorf("AgentName(\"\") = %q, want Claude", got)
 	}
 }

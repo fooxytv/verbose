@@ -39,6 +39,10 @@ func (s *Store) DeleteSession(id string) (DeleteOutcome, error) {
 	case "opencode":
 		err = deleteOpenCodeSession(sess.Info)
 		out.Permanent = true
+	case "copilot":
+		// Same as Codex: a SQLite database Copilot holds open plus a state
+		// directory, and `copilot sessions` offers only `import`.
+		return DeleteOutcome{}, fmt.Errorf("copilot sessions cannot be deleted from verbose")
 	case "codex":
 		// A Codex thread lives across two SQLite databases that Codex itself
 		// holds open, and its CLI has no delete to hand the job to. Editing

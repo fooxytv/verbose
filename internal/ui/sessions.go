@@ -82,17 +82,36 @@ func nestConnector(sessions []session.SessionInfo, i int) string {
 	return "├─"
 }
 
+// sourceMarker is the one-column glyph for a source. Every glyph is width 1;
+// ✦ U+2726 and ▪ U+25AA are also not ambiguous-width, unlike ● and ◈, which
+// were already on screen before that rule existed.
+//
+// The shapes have to differ, not just the code points. ⬢ U+2B22 was the first
+// choice for Copilot and renders as a slightly flattened circle: beside ●, at
+// the size these are actually read at, the two were the same marker. A square
+// next to a circle cannot be mistaken.
+//
+// It is one function because the session list and the project header have to
+// agree: a marker that means OpenCode in one place and nothing in the other is
+// worse than no marker.
+func sourceMarker(source string) string {
+	switch source {
+	case "opencode":
+		return "◈"
+	case "codex":
+		return "✦"
+	case "copilot":
+		return "▪"
+	}
+	return "●"
+}
+
 func formatSessionLine(s session.SessionInfo, width int, connector string) string {
-	// Status indicator
-	status := "●"
-	if s.Source == "opencode" {
-		status = "◈"
-	} else if s.Source == "codex" {
-		// ✦ U+2726 is width 1 and not ambiguous-width, unlike ● and ◈, which
-		// are already on screen and grandfathered in.
-		status = "✦"
-	} else if s.IsAgent {
-		status = "◦"
+	status := sourceMarker(s.Source)
+	if s.Source == "" || s.Source == "claude" {
+		if s.IsAgent {
+			status = "◦"
+		}
 	}
 
 	// The connector goes inside the status column rather than indenting the

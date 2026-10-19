@@ -174,6 +174,73 @@ func TestRenderRealCodexSessions(t *testing.T) {
 	t.Logf("rendered %d codex sessions", len(sessions))
 }
 
+// And over the real Copilot home. Copilot's shapes are its own: a summary that
+// is a whole GitHub issue body, a prompt with a <current_datetime> preamble
+// stapled to it, and sessions whose every turn failed and so have prompts with
+// no replies.
+func TestRenderRealCopilotSessions(t *testing.T) {
+	var sessions []*session.Session
+	for _, dir := range session.DefaultCopilotDirs() {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		parsed, err := session.ParseCopilotDir(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		sessions = append(sessions, parsed...)
+	}
+	if len(sessions) == 0 {
+		t.Skip("no Copilot sessions available")
+	}
+
+	for _, sess := range sessions {
+		if out := renderSessionOverview(sess, sess.Todos, false, 0, 120, 40); strings.TrimSpace(out) == "" {
+			t.Errorf("%s: empty overview", sess.Info.ID)
+		}
+		all := visibleEvents(sess, filterAll, "")
+		if out := renderSessionDetail(sess, all, 0, 120, 40, ""); strings.TrimSpace(out) == "" {
+			t.Errorf("%s: empty timeline", sess.Info.ID)
+		}
+		for i := range sess.Events {
+			renderEventDetail(sess.Events[i], 0, 120, 40)
+			formatEventLine(sess.Events[i], 116, sess.Info.CWD)
+		}
+
+		// A title carrying a newline costs the list a row it did not count.
+		for _, w := range []int{120, 80, 40} {
+			row := formatSessionLine(sess.Info, w, "")
+			if n := len(visibleLines(row)); n != 1 {
+				t.Errorf("%s: the list row took %d rows\n%s", sess.Info.ID, n, row)
+			}
+			if got := terminalColumns(row); got >= w {
+				t.Errorf("%s: the list row draws %d columns at width %d", sess.Info.ID, got, w)
+			}
+		}
+
+		steps := session.BuildReplay(sess)
+		if len(steps) == 0 {
+			continue
+		}
+		m := Model{mode: viewReplay, version: "0.0.0", selectedSession: sess}
+		m.replaySteps = steps
+		for _, sz := range []struct{ w, h int }{{120, 40}, {40, 10}} {
+			for i := range steps {
+				v := m
+				v.width, v.height = sz.w, sz.h
+				v.replayIndex, v.replayTyped = i, -1
+				for n, row := range visibleLines(v.View()) {
+					if got := terminalColumns(row); got >= sz.w {
+						t.Fatalf("%s: step %d row %d draws %d columns at width %d\n  %q",
+							sess.Info.ID, i, n, got, sz.w, stripAnsi(row))
+					}
+				}
+			}
+		}
+	}
+	t.Logf("rendered %d copilot sessions", len(sessions))
+}
+
 // maxStepsPerSession bounds the smoke sweep: enough steps to catch a layout
 // mistake anywhere in a session, few enough that the suite stays quick enough
 // to run on every change.

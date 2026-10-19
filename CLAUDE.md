@@ -1,8 +1,9 @@
 # verbose
 
-A terminal UI for reading Claude Code, Codex and OpenCode session transcripts.
-Go, bubbletea, lipgloss. No CGo anywhere — `modernc.org/sqlite` for the Codex
-and OpenCode databases, `chroma` for syntax highlighting.
+A terminal UI for reading Claude Code, Codex, Copilot and OpenCode session
+transcripts. Go, bubbletea, lipgloss. No CGo anywhere — `modernc.org/sqlite`
+for the Codex, Copilot and OpenCode databases, `chroma` for syntax
+highlighting.
 
 `AGENTS.md` is a symlink to this file, so Codex and anything else following the
 cross-tool convention reads the same document. Claude Code reads `CLAUDE.md`
@@ -12,6 +13,7 @@ file serves both — edit this one.
 Longer notes that would bloat this file live in [docs/notes](docs/notes):
 the [OpenCode database schema](docs/notes/opencode-database.md), the
 [Codex databases](docs/notes/codex-databases.md), the
+[Copilot store](docs/notes/copilot-store.md), the
 [store and watcher traps](docs/notes/store-and-watcher.md), and
 [why the replay and tree are shaped as they are](docs/notes/replay-and-tree.md).
 
@@ -328,6 +330,52 @@ Nothing else goes through it: every other `Detail` is a sentence
 - Costs about 1ms for a real plan and 4.6ms for a 60KB one, against a 30ms
   tick, so there is no cache. `highlightCode` already caches the fenced blocks.
 
+## Reading a Copilot session
+
+`pkg/session/copilot.go`. Full shapes in
+[docs/notes/copilot-store.md](docs/notes/copilot-store.md).
+
+- **The database lags the event stream.** `session-store.db` has the metadata
+  and a `turns` table; `session-state/<id>/events.jsonl` has what was actually
+  said. The live session here had 25 events and ZERO turns, so the stream wins
+  wherever there is one. `turns` is the fallback for a GitHub-hosted run,
+  which writes no state directory.
+- **`model.response` and `model.message` are not the reply.** They are the
+  side call that writes the session's title, and their content is a
+  `<session-title>` tag. Only `assistant.message` is the answer.
+- **`transformedContent` is not what was typed** — it carries a
+  `<current_datetime>` preamble meant for the model.
+- **A failed turn raises `session.error` AND `model.turn_failed`**, so
+  counting both reported five failures for three rate-limited prompts.
+- **`summary` can be a whole GitHub issue body**, newlines included, and a
+  title with a newline costs the list a row it did not count.
+- **`session.usage_record` is the best cost record of any source**: a full
+  token breakdown AND a real price, per turn.
+- **Tool calls are unimplemented** because no session on this machine has ever
+  made one, and the event names are not recoverable from the binary (it is a
+  compressed bundle). It needs one real tool-using session, not a guess.
+- Resume is `copilot --resume <id>`, and `--interactive "<reply>"` to send a
+  first message with it. **Not `--prompt`**, which runs the reply and exits.
+
+## Source markers
+
+`sourceMarker` in `internal/ui/sessions.go` is the single place the glyph for a
+source lives, because the session list and the project header have to agree.
+
+- **The SHAPES have to differ, not just the code points.** `⬢` U+2B22 passed
+  every rule — width 1, not ambiguous — and renders as a slightly flattened
+  circle: beside `●`, at the size these are actually read at, it was the same
+  marker. The recording is what showed it; a unit test never could. `▪` U+25AA
+  is a square and cannot be mistaken for anything else here.
+- `●` claude, `✦` codex, `◈` opencode, `▪` copilot, `◦` a subagent.
+- **A project is a DIRECTORY**, so it carries a SET of markers. One directory
+  on this machine already holds OpenCode and Copilot sessions, and the demo's
+  synthetic tree has one with three agents in it.
+- **The tree belongs to the session being replayed.** `startReplay` reloads it
+  when one is on screen; the split toggle only loads when there is none, so
+  opening a different session left the sidebar marking the previous session's
+  files.
+
 ## The path and branch line
 
 `contextLine` draws the session's directory and branch under the replay's
@@ -401,9 +449,13 @@ directly instead.
 ## Demo recordings
 
 `docs/demo.tape` (VHS) produces `docs/demo.gif` and `docs/img/*.png` for the
-README. It runs against a synthetic tree built by `docs/demo-data.py` under
-`HOME=/tmp/devdemo`, never the real one — **this repository is public and a real
-transcript carries project names, paths, prompts and code.**
+README. It runs against a synthetic HOME built by `docs/demo-data.py` — four
+stores, one per agent — never the real one: **this repository is public and a
+real transcript carries project names, paths, prompts and code.**
+
+**`CODEX_HOME` and `XDG_DATA_HOME` must be unset along with `HOME`.** Each
+redirects where verbose looks for a store, so leaving one set points the
+recording at the real Codex or OpenCode history on whichever machine made it.
 
 ```bash
 brew install vhs

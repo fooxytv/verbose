@@ -154,6 +154,17 @@ func continueArgs(id, prompt string) (cli string, args []string) {
 		return "codex", args
 	}
 
+	// Copilot takes no bare prompt at all. --interactive runs the reply and
+	// leaves you in the session; --prompt would run it and exit, which is the
+	// opposite of continuing.
+	if cpID, ok := strings.CutPrefix(id, "cp-"); ok {
+		args = []string{"--resume", cpID}
+		if prompt != "" {
+			args = append(args, "--interactive", prompt)
+		}
+		return "copilot", args
+	}
+
 	args = []string{"--resume", id}
 	if prompt != "" {
 		args = append(args, prompt)

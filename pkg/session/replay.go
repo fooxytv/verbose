@@ -109,7 +109,7 @@ func BuildReplay(sess *Session) []ReplayStep {
 			codePath = ""
 		}
 		file := stepFile(e, codePath, sess.Info.CWD)
-		title := replayTitle(e, sess.Info.CWD)
+		title := replayTitle(e, sess.Info.CWD, AgentName(sess.Info.Source))
 		// "Ran mkdir -p … && cat > app.js <<'EOF'" says less than "Wrote
 		// app.js", and the command is shown underneath anyway.
 		if code != "" && codePath != "" {
@@ -196,8 +196,24 @@ func isFailure(e Event) bool {
 	return e.Type == EventToolDenied
 }
 
+// AgentName is how a source is written when a sentence has to name it. Four
+// agents write transcripts now, and a Codex thread headlined "Claude's plan"
+// names the wrong one.
+func AgentName(source string) string {
+	switch source {
+	case "opencode":
+		return "OpenCode"
+	case "codex":
+		return "Codex"
+	case "copilot":
+		return "Copilot"
+	}
+	// Claude Code's parser never sets Source, so an empty one is Claude.
+	return "Claude"
+}
+
 // replayTitle is the one-line headline for a step.
-func replayTitle(e Event, cwd string) string {
+func replayTitle(e Event, cwd, agent string) string {
 	switch e.Type {
 	case EventUserPrompt:
 		// Inside a subagent run the "user" is the agent that dispatched it, so
@@ -207,9 +223,9 @@ func replayTitle(e Event, cwd string) string {
 		}
 		return "You asked"
 	case EventText:
-		return "Claude's plan"
+		return agent + "'s plan"
 	case EventThinking:
-		return "Claude's reasoning"
+		return agent + "'s reasoning"
 	case EventCompaction:
 		return "Context compacted"
 	case EventUserFileEdit:

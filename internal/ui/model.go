@@ -945,8 +945,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if target := m.deleteTarget(); target != nil {
 			// Codex has no delete to delegate to, so say so here rather than
 			// asking a question whose yes cannot be honoured.
-			if target.Source == "codex" {
-				m.statusMsg = "Codex sessions cannot be deleted from verbose"
+			if target.Source == "codex" || target.Source == "copilot" {
+				m.statusMsg = "Codex and Copilot sessions cannot be deleted from verbose"
 				return m, clearStatusAfter()
 			}
 			m.confirmDelete = target

@@ -189,26 +189,27 @@ func matchesProject(filter string, proj *session.ProjectInfo) bool {
 // ── DTOs ────────────────────────────────────────────────────────────────────
 
 type projectD struct {
-	Name       string `json:"name"`
-	ProjectDir string `json:"projectDir"`
-	CWD        string `json:"cwd,omitempty"`
-	EncodedDir string `json:"encodedDir,omitempty"`
+	Name          string `json:"name"`
+	ProjectDir    string `json:"projectDir"`
+	CWD           string `json:"cwd,omitempty"`
+	EncodedDir    string `json:"encodedDir,omitempty"`
+	Sessions      int    `json:"sessions"`
+	ToolCalls     int    `json:"toolCalls"`
+	UserPrompts   int    `json:"userPrompts"`
+	Errors        int    `json:"errors"`
+	SubagentCalls int    `json:"subagentCalls"`
+	Denials       int    `json:"denials"`
+	Interruptions int    `json:"interruptions"`
+	LinesAdded    int    `json:"linesAdded"`
+	LinesRemoved  int    `json:"linesRemoved"`
 
-	Sessions      int `json:"sessions"`
-	ToolCalls     int `json:"toolCalls"`
-	UserPrompts   int `json:"userPrompts"`
-	Errors        int `json:"errors"`
-	SubagentCalls int `json:"subagentCalls"`
-	Denials       int `json:"denials"`
-	Interruptions int `json:"interruptions"`
-	LinesAdded    int `json:"linesAdded"`
-	LinesRemoved  int `json:"linesRemoved"`
-
-	InputTokens      int     `json:"inputTokens"`
-	OutputTokens     int     `json:"outputTokens"`
-	CacheReadTokens  int     `json:"cacheReadTokens"`
-	CacheWriteTokens int     `json:"cacheWriteTokens"`
-	CostUSD          float64 `json:"costUSD"`
+	InputTokens      int `json:"inputTokens"`
+	OutputTokens     int `json:"outputTokens"`
+	CacheReadTokens  int `json:"cacheReadTokens"`
+	CacheWriteTokens int `json:"cacheWriteTokens"`
+	// TotalTokens includes the sources that report no breakdown.
+	TotalTokens int     `json:"totalTokens"`
+	CostUSD     float64 `json:"costUSD"`
 
 	FirstSession time.Time `json:"firstSession"`
 	LastSession  time.Time `json:"lastSession"`
@@ -244,7 +245,7 @@ type sessionD struct {
 	ProjectDir  string `json:"projectDir"`
 	CWD         string `json:"cwd,omitempty"`
 	FilePath    string `json:"filePath,omitempty"`
-	Source      string `json:"source"`    // always named: claude | opencode | codex
+	Source      string `json:"source"`    // always named: claude | opencode | codex | copilot
 	CostBasis   string `json:"costBasis"` // recorded | estimated | estimated-fallback | none
 	Model       string `json:"model,omitempty"`
 	GitBranch   string `json:"gitBranch,omitempty"`
@@ -350,7 +351,9 @@ func sourceName(src string) string {
 // newer than verbose's price table.
 func costBasis(s session.SessionInfo) string {
 	switch sourceName(s.Source) {
-	case "opencode":
+	case "opencode", "copilot":
+		// Both record what a turn actually cost: OpenCode on the session row,
+		// Copilot in a usage record per turn.
 		return "recorded"
 	case "codex":
 		// Codex records a token total and no cost, and its model ids are not
@@ -374,6 +377,8 @@ func newProjectD(p *session.ProjectInfo) projectD {
 		Interruptions: p.TotalInterruptions,
 		LinesAdded:    p.TotalLinesAdded, LinesRemoved: p.TotalLinesRemoved,
 
+		Sources:     p.Sources,
+		TotalTokens: p.TotalTokens(),
 		InputTokens: p.TotalInputTokens, OutputTokens: p.TotalOutputTokens,
 		CacheReadTokens:  p.TotalCacheReadTokens,
 		CacheWriteTokens: p.TotalCacheWriteTokens,
@@ -391,13 +396,11 @@ func newProjectD(p *session.ProjectInfo) projectD {
 		})
 	}
 
-	// Per-model spend and the mix of sources, folded out of the sessions.
+	// Per-model spend, folded out of the sessions. The source set comes from
+	// the store, which counts a session with no Source as Claude Code rather
+	// than dropping it.
 	models := map[string]*modelD{}
-	sources := map[string]bool{}
 	for _, s := range p.Sessions {
-		if s.Source != "" {
-			sources[s.Source] = true
-		}
 		name := s.Model
 		if name == "" {
 			name = "unknown"
@@ -416,11 +419,6 @@ func newProjectD(p *session.ProjectInfo) projectD {
 		d.Models = append(d.Models, *m)
 	}
 	sort.Slice(d.Models, func(i, j int) bool { return d.Models[i].CostUSD > d.Models[j].CostUSD })
-
-	for s := range sources {
-		d.Sources = append(d.Sources, s)
-	}
-	sort.Strings(d.Sources)
 
 	return d
 }

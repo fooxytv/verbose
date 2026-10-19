@@ -41,6 +41,9 @@ func resumeArgs(sessionID string) (cli string, args []string) {
 	if id, ok := strings.CutPrefix(sessionID, "cx-"); ok {
 		return "codex", []string{"resume", id}
 	}
+	if id, ok := strings.CutPrefix(sessionID, "cp-"); ok {
+		return "copilot", []string{"--resume", id}
+	}
 	return "claude", []string{"--resume", sessionID}
 }
 
@@ -52,6 +55,8 @@ func newSessionCmd(source, cwd string) tea.Cmd {
 		cli = "opencode"
 	case "codex":
 		cli = "codex"
+	case "copilot":
+		cli = "copilot"
 	}
 	return launchInTerminal(cli, nil, cwd)
 }
@@ -64,6 +69,10 @@ func forkSessionCmd(source, cwd, lastPrompt string) tea.Cmd {
 		return launchInTerminal("opencode", []string{"--prompt", prompt}, cwd)
 	case "codex":
 		return launchInTerminal("codex", []string{prompt}, cwd)
+	case "copilot":
+		// --interactive runs the prompt and STAYS; --prompt would run it and
+		// exit, which is not what forking a session into a new one means.
+		return launchInTerminal("copilot", []string{"--interactive", prompt}, cwd)
 	}
 	return launchInTerminal("claude", []string{prompt}, cwd)
 }

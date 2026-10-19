@@ -28,6 +28,11 @@ type Store struct {
 	cxDirs      map[string]time.Time // tracked Codex homes: dir → newest mtime
 	cxExtraDirs []string             // explicitly specified Codex homes
 
+	// Copilot is tracked by home too: the database carries the metadata and
+	// the transcript is a file per session beside it.
+	cpDirs      map[string]time.Time // tracked Copilot homes: dir → last mtime
+	cpExtraDirs []string             // explicitly specified Copilot homes
+
 	// relinks rewrite the paths of sessions whose folder was renamed or moved,
 	// applied as each one loads. See relink.go.
 	relinks Relinks
@@ -53,6 +58,7 @@ func NewStore() (*Store, error) {
 		updates:  make(chan struct{}, 1),
 		ocDBs:    make(map[string]time.Time),
 		cxDirs:   make(map[string]time.Time),
+		cpDirs:   make(map[string]time.Time),
 	}
 	// A broken links file must not stop verbose opening: the sessions are
 	// still readable, only with their recorded paths.
@@ -69,6 +75,11 @@ func (s *Store) AddOpenCodeDB(path string) {
 // AddCodexDir adds an explicit Codex home to scan.
 func (s *Store) AddCodexDir(path string) {
 	s.cxExtraDirs = append(s.cxExtraDirs, path)
+}
+
+// AddCopilotDir adds an explicit Copilot home to scan.
+func (s *Store) AddCopilotDir(path string) {
+	s.cpExtraDirs = append(s.cpExtraDirs, path)
 }
 
 // Scan discovers all sessions from the Claude projects directory.
@@ -114,6 +125,9 @@ func (s *Store) Scan() error {
 
 	// And for Codex homes
 	s.scanCodexDirs()
+
+	// And for Copilot homes
+	s.scanCopilotDirs()
 
 	// Every transcript is loaded by now, so subagent runs can be anchored back
 	// into the sessions that launched them.
@@ -441,6 +455,69 @@ func codexMtime(dir string) (time.Time, bool) {
 	return newest, true
 }
 
+// scanCopilotDirs discovers and parses Copilot homes.
+func (s *Store) scanCopilotDirs() {
+	dirs := make(map[string]bool)
+	for _, d := range s.cpExtraDirs {
+		dirs[d] = true
+	}
+	for _, d := range DefaultCopilotDirs() {
+		dirs[d] = true
+	}
+
+	for dir := range dirs {
+		s.loadCopilotDir(dir)
+	}
+}
+
+// loadCopilotDir parses one Copilot home into the store and records what it
+// was read at.
+func (s *Store) loadCopilotDir(dir string) bool {
+	mtime, ok := copilotMtime(dir)
+	if !ok {
+		return false
+	}
+	sessions, err := ParseCopilotDir(dir)
+	if err != nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cpDirs[dir] = mtime
+	for _, sess := range sessions {
+		s.relinks.Apply(sess)
+		s.sessions[sess.Info.ID] = sess
+	}
+	return true
+}
+
+// copilotMtime is the newest modification time of the database and of the
+// session-state directory. The database alone is not enough: a live session
+// appends to its events file for minutes before the database row is updated,
+// and that is precisely the session worth reloading.
+func copilotMtime(dir string) (time.Time, bool) {
+	info, err := os.Stat(filepath.Join(dir, "session-store.db"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	newest := info.ModTime()
+
+	state := filepath.Join(dir, "session-state")
+	if entries, err := os.ReadDir(state); err == nil {
+		for _, e := range entries {
+			fi, err := os.Stat(filepath.Join(state, e.Name(), "events.jsonl"))
+			if err != nil {
+				continue
+			}
+			if fi.ModTime().After(newest) {
+				newest = fi.ModTime()
+			}
+		}
+	}
+	return newest, true
+}
+
 // How long to wait after a write before re-parsing, and the longest a file may
 // stay dirty while being written to continuously. Without the second bound, an
 // agent that writes more often than the debounce interval would never trigger a
@@ -518,6 +595,9 @@ func (s *Store) Watch() <-chan struct{} {
 
 	// And Codex homes, which are SQLite too and poll for the same reason
 	go s.watchCodex()
+
+	// And Copilot homes
+	go s.watchCopilot()
 
 	return s.updates
 }
@@ -605,6 +685,41 @@ func (s *Store) watchCodex() {
 	}
 }
 
+// watchCopilot polls tracked Copilot homes, for the same reason the other two
+// are polled: the state that changes is a SQLite database and a file being
+// appended to, neither of which fsnotify reports usefully here.
+func (s *Store) watchCopilot() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.mu.RLock()
+		tracked := make(map[string]time.Time, len(s.cpDirs))
+		for dir, mtime := range s.cpDirs {
+			tracked[dir] = mtime
+		}
+		s.mu.RUnlock()
+
+		changed := false
+		for dir, lastMtime := range tracked {
+			mtime, ok := copilotMtime(dir)
+			if !ok || !mtime.After(lastMtime) {
+				continue
+			}
+			if s.loadCopilotDir(dir) {
+				changed = true
+			}
+		}
+
+		if changed {
+			select {
+			case s.updates <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
 // GetSessions returns all sessions sorted by last update time (newest first).
 func (s *Store) GetSessions() []SessionInfo {
 	s.mu.RLock()
@@ -658,7 +773,19 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 		proj.TotalOutputTokens += info.OutputTokens
 		proj.TotalCacheReadTokens += info.CacheReadTokens
 		proj.TotalCacheWriteTokens += info.CacheWriteTokens
+		proj.TotalTokensReported += info.TokensTotal
 		proj.TotalCostUSD += info.CostUSD
+
+		// Which tool did the work. An empty Source is Claude Code, which
+		// predates the field.
+		src := info.Source
+		if src == "" {
+			src = "claude"
+		}
+		if proj.SourceSessions == nil {
+			proj.SourceSessions = make(map[string]int)
+		}
+		proj.SourceSessions[src]++
 		proj.TotalLinesAdded += info.LinesAdded
 		proj.TotalLinesRemoved += info.LinesRemoved
 		proj.TotalSubagentCalls += info.SubagentCalls
@@ -730,6 +857,12 @@ func (s *Store) GetProjectInfo(projectDir string) *ProjectInfo {
 	if len(proj.MostEditedFiles) > 10 {
 		proj.MostEditedFiles = proj.MostEditedFiles[:10]
 	}
+
+	// Sorted, so the markers and the counts read in the same order every time.
+	for src := range proj.SourceSessions {
+		proj.Sources = append(proj.Sources, src)
+	}
+	sort.Strings(proj.Sources)
 
 	// Read MEMORY.md
 	if encodedDir != "" {
