@@ -244,8 +244,8 @@ type sessionD struct {
 	ProjectDir  string `json:"projectDir"`
 	CWD         string `json:"cwd,omitempty"`
 	FilePath    string `json:"filePath,omitempty"`
-	Source      string `json:"source"`    // always named: "claude" or "opencode"
-	CostBasis   string `json:"costBasis"` // recorded | estimated | estimated-fallback
+	Source      string `json:"source"`    // always named: claude | opencode | codex
+	CostBasis   string `json:"costBasis"` // recorded | estimated | estimated-fallback | none
 	Model       string `json:"model,omitempty"`
 	GitBranch   string `json:"gitBranch,omitempty"`
 
@@ -258,11 +258,14 @@ type sessionD struct {
 	LastUpdate time.Time `json:"lastUpdate"`
 	ActiveSec  float64   `json:"activeSeconds"`
 
-	InputTokens      int     `json:"inputTokens"`
-	OutputTokens     int     `json:"outputTokens"`
-	CacheReadTokens  int     `json:"cacheReadTokens"`
-	CacheWriteTokens int     `json:"cacheWriteTokens"`
-	CostUSD          float64 `json:"costUSD"`
+	InputTokens      int `json:"inputTokens"`
+	OutputTokens     int `json:"outputTokens"`
+	CacheReadTokens  int `json:"cacheReadTokens"`
+	CacheWriteTokens int `json:"cacheWriteTokens"`
+	// TotalTokens is the four above, or the only number a source reports:
+	// Codex records a per-thread total and no breakdown.
+	TotalTokens int     `json:"totalTokens"`
+	CostUSD     float64 `json:"costUSD"`
 
 	Events         int `json:"events"`
 	ToolCalls      int `json:"toolCalls"`
@@ -346,8 +349,13 @@ func sourceName(src string) string {
 // the model's published rates — and from a fallback rate when the model id is
 // newer than verbose's price table.
 func costBasis(s session.SessionInfo) string {
-	if sourceName(s.Source) == "opencode" {
+	switch sourceName(s.Source) {
+	case "opencode":
 		return "recorded"
+	case "codex":
+		// Codex records a token total and no cost, and its model ids are not
+		// in the price table, so there is nothing to estimate from either.
+		return "none"
 	}
 	if session.PriceKnown(s.Model) {
 		return "estimated"
@@ -432,7 +440,7 @@ func newSessionD(s session.SessionInfo) sessionD {
 
 		InputTokens: s.InputTokens, OutputTokens: s.OutputTokens,
 		CacheReadTokens: s.CacheReadTokens, CacheWriteTokens: s.CacheWriteTokens,
-		CostUSD: s.CostUSD,
+		TotalTokens: s.TotalTokens(), CostUSD: s.CostUSD,
 
 		Events: s.EventCount, ToolCalls: s.ToolCallCount,
 		UserPrompts: s.UserPrompts, BashCommands: s.BashCommands,

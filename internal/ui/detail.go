@@ -17,7 +17,7 @@ func renderSessionDetail(sess *session.Session, visible []int, cursor int, width
 	var b strings.Builder
 
 	info := sess.Info
-	totalTokens := info.InputTokens + info.OutputTokens + info.CacheReadTokens + info.CacheWriteTokens
+	totalTokens := info.TotalTokens()
 
 	header := headerStyle.Render(fmt.Sprintf(" %s > %s  Timeline", info.ProjectName, shortID(info.ID)))
 	statParts := []string{

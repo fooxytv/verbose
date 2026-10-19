@@ -7,11 +7,13 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/fooxytv/verbose.svg)](https://pkg.go.dev/github.com/fooxytv/verbose/pkg/session)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A terminal UI for browsing and analyzing [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-and [OpenCode](https://opencode.ai) session transcripts.
+A terminal UI for browsing and analyzing [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
+[Codex](https://developers.openai.com/codex/cli) and [OpenCode](https://opencode.ai)
+session transcripts.
 
-Verbose reads the session data both agents store locally and presents it in a single
-interactive, color-coded viewer with real-time updates.
+Verbose reads the session data these agents store locally and presents it in a single
+interactive, color-coded viewer with real-time updates — and hands any of them
+back to its own CLI to carry on.
 
 ![verbose](docs/demo.gif)
 
@@ -20,11 +22,13 @@ interactive, color-coded viewer with real-time updates.
 
 ## Features
 
-- Browse all Claude Code and OpenCode sessions across projects, side by side
+- Browse Claude Code, Codex and OpenCode sessions across projects, side by side
 - Subagent runs appear inline in their parent's timeline, at the call that
   launched them — and separately, so you can see what one run cost
-- Sessions are listed by what they are about, not by ID — OpenCode's own title,
-  or the opening prompt for Claude Code
+- Sessions are listed by what they are about, not by ID — OpenCode's and
+  Codex's own titles, or the opening prompt for Claude Code
+- `c` resumes any of them in the right CLI: `claude --resume`,
+  `codex resume`, `opencode --session`
 - Event timeline with color-coded entries (prompts, tool calls, thinking, results)
 - Detailed event drill-down with diff highlighting for file edits
 - Session summary with token usage breakdown and activity stats
@@ -41,7 +45,7 @@ interactive, color-coded viewer with real-time updates.
 ## What it looks like
 
 **Every session across every project**, by what it is about rather than by id.
-`◦` marks a subagent run, `◈` an OpenCode session. A subagent sits **under the
+`◦` marks a subagent run, `◈` an OpenCode session, `✦` a Codex thread. A subagent sits **under the
 session that spawned it**, joined by `├─` and `└─`, so one piece of work reads
 as one block instead of rows scattered by timestamp.
 
@@ -89,6 +93,9 @@ still carries its own cost and its own work.
 At least one of:
 
 - **Claude Code** — session transcripts are read from `~/.claude/projects/`
+- **Codex** — threads are read from the two SQLite databases under
+  `~/.codex` (`$CODEX_HOME` if set): `state_N.sqlite` for the metadata,
+  `thread_history_N.sqlite` for the content
 - **OpenCode** — sessions are read from its database, normally
   `~/.local/share/opencode/opencode.db`
 
@@ -152,8 +159,9 @@ verbose
 verbose -project myapp
 verbose -project /path/to/project
 
-# Point at an OpenCode database in a non-standard location
+# Point at an OpenCode database or a Codex home in a non-standard location
 verbose -opencode /path/to/opencode.db
+verbose -codex /path/to/codex-home
 ```
 
 ### JSON output
@@ -170,13 +178,16 @@ verbose -json session <id>              # one session's detail and todos
 verbose -json session -events <id>      # ...including its event timeline
 ```
 
-Each session carries a `source` (`claude` or `opencode`) and a `costBasis`
-saying where its cost came from: `recorded` for OpenCode, which stores real
-spend, or `estimated` for Claude Code, which stores only tokens. A subagent run
-also carries `isAgent`, its `agentType`, and the `parentSessionId` it belongs
-to.
+Each session carries a `source` (`claude`, `codex` or `opencode`) and a
+`costBasis` saying where its cost came from: `recorded` for OpenCode, which
+stores real spend, `estimated` for Claude Code, which stores only tokens, and
+`none` for Codex, which stores neither a cost nor a token breakdown to derive
+one from. `totalTokens` is always filled: the breakdown summed, or the single
+number Codex reports. A subagent run also carries `isAgent`, its `agentType`,
+and the `parentSessionId` it belongs to.
 
-OpenCode sessions are marked `◈` in the session list, Claude Code sessions `●`.
+In the session list Claude Code sessions are marked `●`, OpenCode `◈` and
+Codex `✦`.
 
 ## Keybindings
 
@@ -534,7 +545,8 @@ that session resumed and your reply already sent. The replay, the tree and your
 place in them stay on screen.
 
 An empty reply is a plain resume, which is what `c` has always done. Claude
-sessions resume with `claude --resume <id> "<reply>"`; OpenCode with
+sessions resume with `claude --resume <id> "<reply>"`; Codex with
+`codex resume <id> "<reply>"`; OpenCode with
 `opencode --session <id> --prompt "<reply>"`.
 
 The reply is handed to the CLI rather than run inside verbose. Verbose reads
@@ -603,6 +615,17 @@ caller is the agent id named in that result; that is what the splice anchors on,
 falling back to timestamp order if it is missing. Costs are not copied into the
 parent — each run is counted once, in its own row.
 
+Codex splits a thread across **two** SQLite databases under `~/.codex`, and
+neither is usable alone: `state_N.sqlite` holds a row per thread — the cwd, the
+model, the git branch, the token total, the generated title — and
+`thread_history_N.sqlite` holds the content as typed items and the per-turn
+timing. The `N` is a schema generation, so both are found by glob and the
+newest pair wins. Items map onto the same vocabulary as everything else: a
+`commandExecution` is shown as a `Bash` call, a `fileChange` as one edit per
+file it touched, an `mcpToolCall` as `mcp__<server>__<tool>`. A thread's
+reasoning is **not** recoverable — the content array is empty on every item on
+disk, and only some keep a one-line summary.
+
 OpenCode instead keeps every project's sessions in one SQLite database, with a row per
 message and a row per content part. Verbose reads it read-only, reassembles each session's
 transcript, and polls for changes. Tool calls are mapped onto the same vocabulary as Claude
@@ -624,6 +647,11 @@ on Linux. **On Windows it is not the Recycle Bin** — the Recycle Bin needs a
 shell API call that verbose does not make, so files land in
 `%USERPROFILE%\.local\share\Trash\files` instead. They are recoverable, just
 not through the usual restore.
+
+Codex sessions **cannot be deleted from verbose**. A thread lives across two
+databases Codex itself holds open and its CLI has no delete to hand the job to,
+so pressing `d` says so rather than asking a question whose yes could not be
+honoured.
 
 OpenCode sessions live as rows in one shared SQLite database, which is unsafe to write
 to underneath a running OpenCode. Deletion is handed to `opencode session delete`, so it

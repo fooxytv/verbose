@@ -89,6 +89,91 @@ func TestRenderRealOpenCodeSessions(t *testing.T) {
 	}
 }
 
+// The same sweep over the real Codex home. Codex brings input shapes the other
+// two do not: a title that is a four-thousand-character paste, a prompt wrapped
+// in XML delegation markup, MCP results that are JSON, and a file "diff" that
+// is really a whole new file. Each of those has reached a renderer that assumed
+// otherwise, so every view and a spread of replay frames are rendered here, at
+// a narrow terminal too, with the row width measured the way the terminal
+// measures it.
+func TestRenderRealCodexSessions(t *testing.T) {
+	var sessions []*session.Session
+	for _, dir := range session.DefaultCodexDirs() {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		parsed, err := session.ParseCodexDir(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		sessions = append(sessions, parsed...)
+	}
+	if len(sessions) == 0 {
+		t.Skip("no Codex sessions available")
+	}
+
+	sizes := []struct{ w, h int }{{120, 40}, {80, 24}, {40, 10}}
+
+	for _, sess := range sessions {
+		if out := renderSessionOverview(sess, sess.Todos, false, 0, 120, 40); strings.TrimSpace(out) == "" {
+			t.Errorf("%s: empty overview", sess.Info.ID)
+		}
+		all := visibleEvents(sess, filterAll, "")
+		if out := renderSessionDetail(sess, all, 0, 120, 40, ""); strings.TrimSpace(out) == "" {
+			t.Errorf("%s: empty timeline", sess.Info.ID)
+		}
+		for _, f := range []eventFilter{filterAll, filterOperations, filterFailures, filterFileOps, filterPrompts} {
+			v := visibleEvents(sess, f, "")
+			renderSessionDetail(sess, v, 0, 120, 40, filterStatus(f, "", len(v), len(sess.Events)))
+		}
+		for i := range sess.Events {
+			renderEventDetail(sess.Events[i], 0, 120, 40)
+			formatEventLine(sess.Events[i], 116, sess.Info.CWD)
+		}
+		formatSessionLine(sess.Info, 120, "")
+
+		steps := session.BuildReplay(sess)
+		if len(steps) == 0 {
+			continue
+		}
+		stride := 1 + len(steps)/maxStepsPerSession
+
+		// Width is measured through Model.View, not renderReplay: the
+		// renderer's rows may be exactly `width` and clampFrame is what takes
+		// the last column back. Asserting on the producer would be holding it
+		// to a contract it does not have.
+		m := Model{mode: viewReplay, version: "0.0.0", selectedSession: sess}
+		m.replaySteps = steps
+
+		for _, sz := range sizes {
+			for i := 0; i < len(steps); i += stride {
+				v := m
+				v.width, v.height = sz.w, sz.h
+				v.replayIndex, v.replayTyped = i, -1
+
+				frame := v.View()
+				if strings.TrimSpace(frame) == "" {
+					t.Fatalf("%s: step %d rendered empty at %dx%d", sess.Info.ID, i, sz.w, sz.h)
+				}
+				for n, row := range visibleLines(frame) {
+					if got := terminalColumns(row); got >= sz.w {
+						t.Fatalf("%s: step %d row %d draws %d columns at width %d\n  %q",
+							sess.Info.ID, i, n, got, sz.w, stripAnsi(row))
+					}
+				}
+
+				// Every intermediate state of the typing animation must render.
+				total := TypedLength(steps[i], sess)
+				for _, f := range []float64{0, 0.5, 1} {
+					v.replayTyped, v.replayPlaying = int(float64(total)*f), true
+					v.View()
+				}
+			}
+		}
+	}
+	t.Logf("rendered %d codex sessions", len(sessions))
+}
+
 // maxStepsPerSession bounds the smoke sweep: enough steps to catch a layout
 // mistake anywhere in a session, few enough that the suite stays quick enough
 // to run on every change.

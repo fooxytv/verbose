@@ -23,6 +23,11 @@ type Store struct {
 	ocDBs      map[string]time.Time // tracked OpenCode DBs: path → last mtime
 	ocExtraDBs []string             // explicitly specified OpenCode DB paths
 
+	// Codex is tracked by HOME rather than by database, because a session is
+	// split across two of them and only the pair is meaningful.
+	cxDirs      map[string]time.Time // tracked Codex homes: dir → newest mtime
+	cxExtraDirs []string             // explicitly specified Codex homes
+
 	// relinks rewrite the paths of sessions whose folder was renamed or moved,
 	// applied as each one loads. See relink.go.
 	relinks Relinks
@@ -47,6 +52,7 @@ func NewStore() (*Store, error) {
 		watcher:  watcher,
 		updates:  make(chan struct{}, 1),
 		ocDBs:    make(map[string]time.Time),
+		cxDirs:   make(map[string]time.Time),
 	}
 	// A broken links file must not stop verbose opening: the sessions are
 	// still readable, only with their recorded paths.
@@ -58,6 +64,11 @@ func NewStore() (*Store, error) {
 // AddOpenCodeDB adds an explicit OpenCode database path to scan.
 func (s *Store) AddOpenCodeDB(path string) {
 	s.ocExtraDBs = append(s.ocExtraDBs, path)
+}
+
+// AddCodexDir adds an explicit Codex home to scan.
+func (s *Store) AddCodexDir(path string) {
+	s.cxExtraDirs = append(s.cxExtraDirs, path)
 }
 
 // Scan discovers all sessions from the Claude projects directory.
@@ -100,6 +111,9 @@ func (s *Store) Scan() error {
 
 	// Scan for OpenCode databases
 	s.scanOpenCodeDBs()
+
+	// And for Codex homes
+	s.scanCodexDirs()
 
 	// Every transcript is loaded by now, so subagent runs can be anchored back
 	// into the sessions that launched them.
@@ -366,6 +380,67 @@ func (s *Store) scanOpenCodeDBs() {
 	}
 }
 
+// scanCodexDirs discovers and parses Codex homes. Codex keeps one pair of
+// databases under a single home covering every thread, so there is nothing
+// per-project to look for.
+func (s *Store) scanCodexDirs() {
+	dirs := make(map[string]bool)
+	for _, d := range s.cxExtraDirs {
+		dirs[d] = true
+	}
+	for _, d := range DefaultCodexDirs() {
+		dirs[d] = true
+	}
+
+	for dir := range dirs {
+		s.loadCodexDir(dir)
+	}
+}
+
+// loadCodexDir parses one Codex home into the store and records what it was
+// read at. It reports whether anything was loaded, which is what the watcher
+// turns into an update signal.
+func (s *Store) loadCodexDir(dir string) bool {
+	mtime, ok := codexMtime(dir)
+	if !ok {
+		return false
+	}
+	sessions, err := ParseCodexDir(dir)
+	if err != nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cxDirs[dir] = mtime
+	for _, sess := range sessions {
+		s.relinks.Apply(sess)
+		s.sessions[sess.Info.ID] = sess
+	}
+	return true
+}
+
+// codexMtime is the newest modification time of a home's two databases. Either
+// one can be the one that moved: the metadata is written when a thread is
+// created or renamed, the history as it runs.
+func codexMtime(dir string) (time.Time, bool) {
+	state, history, ok := CodexDBs(dir)
+	if !ok {
+		return time.Time{}, false
+	}
+	var newest time.Time
+	for _, p := range []string{state, history} {
+		info, err := os.Stat(p)
+		if err != nil {
+			return time.Time{}, false
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	return newest, true
+}
+
 // How long to wait after a write before re-parsing, and the longest a file may
 // stay dirty while being written to continuously. Without the second bound, an
 // agent that writes more often than the debounce interval would never trigger a
@@ -441,6 +516,9 @@ func (s *Store) Watch() <-chan struct{} {
 	// Poll OpenCode databases for changes
 	go s.watchOpenCode()
 
+	// And Codex homes, which are SQLite too and poll for the same reason
+	go s.watchCodex()
+
 	return s.updates
 }
 
@@ -481,6 +559,41 @@ func (s *Store) watchOpenCode() {
 			}
 			s.mu.Unlock()
 			changed = true
+		}
+
+		if changed {
+			select {
+			case s.updates <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// watchCodex polls tracked Codex homes for changes, the way OpenCode's
+// databases are polled: SQLite does not notify usefully, and the write that
+// matters lands in a -wal file the watcher would have to know about anyway.
+func (s *Store) watchCodex() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.mu.RLock()
+		tracked := make(map[string]time.Time, len(s.cxDirs))
+		for dir, mtime := range s.cxDirs {
+			tracked[dir] = mtime
+		}
+		s.mu.RUnlock()
+
+		changed := false
+		for dir, lastMtime := range tracked {
+			mtime, ok := codexMtime(dir)
+			if !ok || !mtime.After(lastMtime) {
+				continue
+			}
+			if s.loadCodexDir(dir) {
+				changed = true
+			}
 		}
 
 		if changed {
