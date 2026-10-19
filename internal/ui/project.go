@@ -7,12 +7,39 @@ import (
 	"github.com/fooxytv/verbose/pkg/session"
 )
 
+// projectMarkers is one glyph per tool that worked in this project, in the
+// order Sources is sorted, so the header reads the same way every time.
+func projectMarkers(proj *session.ProjectInfo) string {
+	var b strings.Builder
+	for _, src := range proj.Sources {
+		b.WriteString(sourceMarker(src))
+	}
+	return b.String()
+}
+
+// projectSourceLine spells the markers out with a session count each, which is
+// what distinguishes "a Codex scratch directory with one thread in it" from a
+// project that has been worked in for weeks.
+func projectSourceLine(proj *session.ProjectInfo) string {
+	parts := make([]string, 0, len(proj.Sources))
+	for _, src := range proj.Sources {
+		parts = append(parts, fmt.Sprintf("%s %s %d",
+			sourceMarker(src), src, proj.SourceSessions[src]))
+	}
+	return strings.Join(parts, mutedStyle.Render("  ·  "))
+}
+
 // renderProjectView renders the project-level view with memory, stats, and session list.
 func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height int) string {
 	var lines []string
 
-	// Header
-	lines = append(lines, headerStyle.Render(fmt.Sprintf(" Project: %s", proj.ProjectName)))
+	// Header. The markers say which tools worked here, because a project is a
+	// DIRECTORY and more than one agent can work in the same one.
+	header := fmt.Sprintf(" Project: %s", proj.ProjectName)
+	if m := projectMarkers(proj); m != "" {
+		header += "  " + m
+	}
+	lines = append(lines, headerStyle.Render(header))
 	dirLabel := proj.CWD
 	if dirLabel == "" {
 		dirLabel = proj.ProjectDir
@@ -24,6 +51,9 @@ func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height 
 	// Stats section
 	lines = append(lines, sectionHeader("Stats"))
 	lines = append(lines, fieldLine("Sessions", fmt.Sprintf("%d", proj.TotalSessions)))
+	if s := projectSourceLine(proj); s != "" {
+		lines = append(lines, fieldLine("Sources", s))
+	}
 	if !proj.FirstSession.IsZero() {
 		lines = append(lines, fieldLine("First Session", proj.FirstSession.Format("2006-01-02 15:04")))
 	}
@@ -32,15 +62,22 @@ func renderProjectView(proj *session.ProjectInfo, scroll, cursor, width, height 
 	}
 	lines = append(lines, fieldLine("Total Cost", costStyle.Render(fmt.Sprintf("$%.4f", proj.TotalCostUSD))))
 
-	totalTokens := proj.TotalInputTokens + proj.TotalOutputTokens + proj.TotalCacheReadTokens + proj.TotalCacheWriteTokens
+	totalTokens := proj.TotalTokens()
 	lines = append(lines, fieldLine("Total Tokens", tokenStyle.Render(formatTokensComma(totalTokens))))
-	lines = append(lines, fieldLine("  Input", formatTokensComma(proj.TotalInputTokens)))
-	lines = append(lines, fieldLine("  Output", formatTokensComma(proj.TotalOutputTokens)))
-	lines = append(lines, fieldLine("  Cache Read", formatTokensComma(proj.TotalCacheReadTokens)))
-	lines = append(lines, fieldLine("  Cache Write", formatTokensComma(proj.TotalCacheWriteTokens)))
 
-	// Token bar
-	if totalTokens > 0 {
+	// Only when there is a split to show. A project of Codex threads has a
+	// real total and no breakdown, and four rows of zero read as a bug.
+	breakdown := proj.TotalInputTokens + proj.TotalOutputTokens +
+		proj.TotalCacheReadTokens + proj.TotalCacheWriteTokens
+	if breakdown > 0 {
+		lines = append(lines, fieldLine("  Input", formatTokensComma(proj.TotalInputTokens)))
+		lines = append(lines, fieldLine("  Output", formatTokensComma(proj.TotalOutputTokens)))
+		lines = append(lines, fieldLine("  Cache Read", formatTokensComma(proj.TotalCacheReadTokens)))
+		lines = append(lines, fieldLine("  Cache Write", formatTokensComma(proj.TotalCacheWriteTokens)))
+	}
+
+	// Token bar — gated on the breakdown for the same reason as the rows.
+	if breakdown > 0 {
 		info := session.SessionInfo{
 			InputTokens:      proj.TotalInputTokens,
 			OutputTokens:     proj.TotalOutputTokens,

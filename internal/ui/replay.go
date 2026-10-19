@@ -669,6 +669,17 @@ func formatOffset(d time.Duration) string {
 // chance to read the first step.
 func (m *Model) startReplay(sess *session.Session) {
 	m.selectedSession = sess
+
+	// A tree already on screen belongs to the session that was being read, not
+	// to this one. Leaving it marked the new session's files with the old
+	// session's activity — the same trap `a` has, which switchRun already
+	// reloads for. The split toggle only loads when treeRoot is nil, so
+	// nothing else would have caught this one.
+	if m.treeRoot != nil || m.treeSplit {
+		m.loadTreeFor(sess)
+		m.treeGen++
+	}
+
 	m.replaySteps = session.BuildReplay(sess)
 	if m.replayCodeOnly {
 		m.replaySteps = codeSteps(m.replaySteps, sess)

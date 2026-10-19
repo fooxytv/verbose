@@ -1,8 +1,9 @@
 # VHS tape for the README recordings:  vhs docs/demo.tape
 #
-# Runs against a synthetic ~/.claude tree built by docs/demo-data.py, never the
-# real one. This repository is public, and a real transcript carries project
-# names, file paths, prompts and code that have no business in a demo.
+# Runs against a synthetic HOME built by docs/demo-data.py — four stores, one
+# per agent verbose reads — and never the real one. This repository is public,
+# and a real transcript carries project names, file paths, prompts and code
+# that have no business in a demo.
 
 Output docs/demo.gif
 
@@ -26,7 +27,10 @@ Set TypingSpeed 60ms
 # HOME is already redirected, so nvim finds the throwaway config under
 # /tmp/devdemo and never loads a personal one.
 Hide
-Type "export HOME=/tmp/devdemo EDITOR=nvim PS1='$ ' && unset TMUX ITERM_SESSION_ID TERM_PROGRAM && clear"
+# CODEX_HOME and XDG_DATA_HOME go with HOME. Each one overrides where verbose
+# looks for a store, so leaving them set would point the recording at the real
+# Codex or OpenCode history on whichever machine made it.
+Type "export HOME=/tmp/devdemo EDITOR=nvim PS1='$ ' && unset TMUX ITERM_SESSION_ID TERM_PROGRAM CODEX_HOME XDG_DATA_HOME && clear"
 Enter
 Sleep 500ms
 Show
@@ -37,15 +41,34 @@ Enter
 Sleep 2.5s
 Screenshot docs/img/sessions.png
 
-# Into the session that did the work: row 5, the one that is 2h38m old.
+# The marker in the first column says which agent did the work: `●` Claude
+# Code, `✦` Codex, `◈` OpenCode, `▪` Copilot, `◦` a subagent under its parent.
+# All four are in this list on purpose — that is the thing to see here.
 #
-# FOUR downs, not five. The subagent now sits directly under its parent in the
-# list (`└─◦`), so a fifth lands on the agent's own run instead — five was
-# right before grouping existed and silently wrong after it.
+# The shapes have to differ at THIS size, not just as code points: the first
+# Copilot marker was a hexagon, which renders beside ● as a slightly flattened
+# circle and was the same marker to anyone reading the frame.
+
+# A project is a DIRECTORY, so more than one agent can work in it. Row 3 is in
+# the webhooks directory, which three of them have now touched, and the project
+# view says so above its stats.
 Down
 Sleep 500ms
 Down
-Sleep 500ms
+Sleep 700ms
+Type "p"
+Sleep 2.5s
+Screenshot docs/img/project.png
+Sleep 2s
+Escape
+Sleep 800ms
+
+# On to the session that did the work: row 5, the one that is 2h38m old. Two
+# more downs from row 3.
+#
+# The count is FOUR from the top, not five. The subagent sits directly under
+# its parent in the list (`└─◦`), so a fifth lands on the agent's own run —
+# five was right before grouping existed and silently wrong after it.
 Down
 Sleep 500ms
 Down
@@ -112,6 +135,34 @@ Sleep 2s
 Type ":q"
 Enter
 Sleep 2.5s
+
+# Back out to the list, and into a thread another agent wrote. Codex records a
+# new file as content rather than as a diff, so the replay types the whole
+# OpenAPI document out — step 5, and `/` jumps straight to it rather than
+# waiting for playback to arrive.
+#
+# This beat is last on purpose: if a row count goes stale it costs this one
+# frame, not the five before it.
+Escape
+Sleep 800ms
+Escape
+Sleep 1.2s
+Down
+Sleep 500ms
+Down
+Sleep 900ms
+Enter
+Sleep 1.5s
+Type "R"
+Sleep 1.2s
+Type "/"
+Sleep 400ms
+Type "5"
+Sleep 500ms
+Enter
+Sleep 3.5s
+Screenshot docs/img/codex.png
+Sleep 2s
 
 Type "q"
 Sleep 1s

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Build a synthetic ~/.claude tree for the verbose demo recordings.
+"""Build a synthetic HOME for the verbose demo recordings.
+
+Four stores, because verbose reads four agents and the demo is meant to show
+that: Claude Code's JSONL transcripts, Codex's two SQLite databases, OpenCode's
+one, and Copilot's database plus event stream.
 
 Everything here is invented. The repo is public, so the demo must not show real
 session titles, client project names, file paths, code or costs.
 """
-import json, os, shutil
+import json, os, shutil, sqlite3
 from datetime import datetime, timedelta, timezone
 
 HOME = "/tmp/devdemo"
@@ -516,5 +520,268 @@ nvim_dir = os.path.join(HOME, ".config", "nvim")
 os.makedirs(nvim_dir, exist_ok=True)
 open(os.path.join(nvim_dir, "init.lua"), "w").write(NVIM_CONFIG)
 
+# ------------------------------------------------- the other three agents
+#
+# Each writes its own store, and verbose reads all of them from this HOME. Two
+# of these deliberately work in a directory another agent has already worked
+# in: a project is a DIRECTORY, so the project view shows a marker per tool and
+# the demo should show that happening.
+#
+# Ages are all OLDER than the main session (2h40m), which keeps that session at
+# the same row in the list. The tape navigates by counting rows, so a session
+# inserted above it moves the target silently.
+
+
+def ms(mins_ago):
+    """Unix milliseconds, the way Codex and OpenCode record time."""
+    return int((NOW - timedelta(minutes=mins_ago)).timestamp() * 1000)
+
+
+def iso(mins_ago):
+    """ISO 8601 with a Z, the way Copilot records time."""
+    return (NOW - timedelta(minutes=mins_ago)).isoformat().replace("+00:00", "Z")
+
+
+# -- Codex: state_N.sqlite is the metadata, thread_history_N.sqlite the content.
+CODEX_HOME = os.path.join(HOME, ".codex")
+os.makedirs(CODEX_HOME, exist_ok=True)
+CX_THREAD = "01a0f3c7-5b82-7d14-9e36-4a7c0b8d2f51"
+
+state = sqlite3.connect(os.path.join(CODEX_HOME, "state_1.sqlite"))
+state.executescript("""
+CREATE TABLE threads (
+    id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL DEFAULT '',
+    cwd TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', name TEXT,
+    model TEXT, model_provider TEXT NOT NULL DEFAULT '', git_branch TEXT,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER, updated_at_ms INTEGER,
+    source TEXT NOT NULL DEFAULT 'vscode', thread_source TEXT);
+CREATE TABLE thread_spawn_edges (
+    parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'completed');
+""")
+state.execute(
+    "INSERT INTO threads (id, cwd, title, name, model, model_provider, git_branch,"
+    " tokens_used, created_at_ms, updated_at_ms, thread_source) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    (CX_THREAD, CWD,
+     "# Pasted context\n\nthe whole issue body goes here, verbatim and very long",
+     "Generate the OpenAPI spec", "gpt-6-astra", "openai", "main",
+     128_400, ms(205), ms(198), "user"))
+state.commit()
+state.close()
+
+hist = sqlite3.connect(os.path.join(CODEX_HOME, "thread_history_1.sqlite"))
+hist.executescript("""
+CREATE TABLE thread_items (
+    thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id TEXT NOT NULL,
+    rollout_ordinal INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,
+    item_json TEXT NOT NULL, item_type TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (thread_id, turn_id, item_id));
+CREATE TABLE thread_turns (
+    thread_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+    rollout_ordinal INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'completed', duration_ms INTEGER,
+    PRIMARY KEY (thread_id, turn_id));
+""")
+
+# An "add" carries the file's whole content in its diff field; an "update"
+# carries unified hunks. Both are on camera: the replay types the new file out
+# and pairs the patched lines side by side.
+OPENAPI_YAML = """openapi: 3.1.0
+info:
+  title: notestore
+  version: 1.0.0
+paths:
+  /notes/{id}:
+    get:
+      responses:
+        '200': { description: the note }
+        '404': { description: no such note }
+"""
+
+CX_ITEMS = [
+    ("userMessage", {"type": "userMessage", "content": [
+        {"type": "text", "text": "Generate an OpenAPI spec from the handlers and "
+                                 "check it covers the 404 path."}]}),
+    ("reasoning", {"type": "reasoning", "summary": ["**Reading the route table**"]}),
+    ("agentMessage", {"type": "agentMessage", "text":
+        "The router registers two paths. I'll write the spec from those and the "
+        "status codes the handler actually returns."}),
+    ("commandExecution", {"type": "commandExecution", "status": "completed",
+                          "command": "rg -n 'http.Status' internal/http",
+                          "cwd": CWD, "exitCode": 0, "durationMs": 240,
+                          "aggregatedOutput":
+                              "internal/http/handler.go:44:\t\t\thttp.Error(w, \"note not found\", http.StatusNotFound)\n"
+                              "internal/http/handler.go:47:\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n"}),
+    ("fileChange", {"type": "fileChange", "status": "completed", "changes": [
+        {"path": f"{CWD}/docs/openapi.yaml", "kind": {"type": "add"},
+         "diff": OPENAPI_YAML}]}),
+    ("fileChange", {"type": "fileChange", "status": "completed", "changes": [
+        {"path": f"{CWD}/docs/api.md", "kind": {"type": "update"},
+         "diff": "@@ -1,4 +1,5 @@\n # API\n \n"
+                 "-- `GET /notes/{id}` — 200, or 404 when missing\n"
+                 "+- `GET /notes/{id}` — 200, or 404 when missing\n"
+                 "+- The machine-readable spec lives in `openapi.yaml`\n"
+                 " - `POST /notes` — 201\n"}]}),
+    ("agentMessage", {"type": "agentMessage", "text":
+        "Spec written to `docs/openapi.yaml`, and `docs/api.md` now points at it. "
+        "The 404 response is covered."}),
+]
+for i, (kind, payload) in enumerate(CX_ITEMS, start=1):
+    hist.execute(
+        "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal,"
+        " created_at_ms, item_json, item_type) VALUES (?,?,?,?,?,?,?)",
+        (CX_THREAD, "turn-1", f"item-{i}", i, ms(205) + i * 4000,
+         json.dumps(payload), kind))
+hist.execute("INSERT INTO thread_turns (thread_id, turn_id, duration_ms) VALUES (?,?,?)",
+             (CX_THREAD, "turn-1", 412_000))
+hist.commit()
+hist.close()
+
+# -- OpenCode: one database, a row per message and a row per content part.
+OC_DIR = os.path.join(HOME, ".local", "share", "opencode")
+os.makedirs(OC_DIR, exist_ok=True)
+OC_SESSION = "ses_4d9f2a7c1b83e05"
+WEBHOOKS = "/tmp/devdemo/webhooks"
+
+oc = sqlite3.connect(os.path.join(OC_DIR, "opencode.db"))
+oc.executescript("""
+CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT);
+CREATE TABLE session (
+    id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, title TEXT,
+    directory TEXT, model TEXT, agent TEXT, cost REAL DEFAULT 0,
+    tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0,
+    tokens_cache_read INTEGER DEFAULT 0, tokens_cache_write INTEGER DEFAULT 0,
+    time_created INTEGER, time_updated INTEGER);
+CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT);
+CREATE TABLE todo (session_id TEXT, content TEXT, status TEXT, position INTEGER);
+""")
+oc.execute("INSERT INTO project (id, worktree) VALUES (?,?)", ("prj_webhooks", WEBHOOKS))
+oc.execute(
+    "INSERT INTO session (id, project_id, title, directory, model, agent, cost,"
+    " tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,"
+    " time_created, time_updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    (OC_SESSION, "prj_webhooks", "Cap the delivery retry backoff", WEBHOOKS,
+     json.dumps({"id": "claude-sonnet-4-5", "providerID": "anthropic"}), "build",
+     0.1842, 18_400, 2_100, 61_000, 3_400, ms(262), ms(255)))
+
+# A diff OpenCode's edit tool would attach: one file, unified, with the Index
+# header its multi-file patches use.
+OC_DIFF = """Index: delivery.go
+===================================================================
+--- delivery.go
++++ delivery.go
+@@ -22,6 +22,9 @@
+ func backoff(attempt int) time.Duration {
+ \td := time.Duration(1<<attempt) * time.Second
++\tif d > maxBackoff {
++\t\treturn maxBackoff
++\t}
+ \treturn d
+ }
+"""
+
+OC_PARTS = [
+    ("user", [{"type": "text", "text": "Deliveries that keep failing back off for "
+                                       "hours. Cap it at a minute."}]),
+    ("assistant", [
+        {"type": "text", "text": "The backoff doubles without a ceiling. I'll clamp it."},
+        {"type": "tool", "tool": "read", "callID": "oc1",
+         "state": {"status": "completed",
+                   "input": {"filePath": f"{WEBHOOKS}/delivery.go"},
+                   "output": "22 lines"}},
+        {"type": "tool", "tool": "edit", "callID": "oc2",
+         "state": {"status": "completed",
+                   "input": {"filePath": f"{WEBHOOKS}/delivery.go"},
+                   "output": "applied", "metadata": {"diff": OC_DIFF}}},
+        {"type": "text", "text": "Capped at `maxBackoff`. A delivery now retries "
+                                 "every minute instead of every few hours."},
+    ]),
+]
+pid = 0
+for n, (role, parts) in enumerate(OC_PARTS, start=1):
+    mid = f"msg_{n}"
+    oc.execute("INSERT INTO message (id, session_id, time_created, data) VALUES (?,?,?,?)",
+               (mid, OC_SESSION, ms(262) + n * 20_000,
+                json.dumps({"role": role, "modelID": "claude-sonnet-4-5",
+                            "providerID": "anthropic"})))
+    for part in parts:
+        pid += 1
+        oc.execute("INSERT INTO part (id, message_id, time_created, data) VALUES (?,?,?,?)",
+                   (f"prt_{pid:04d}", mid, ms(262) + n * 20_000, json.dumps(part)))
+oc.commit()
+oc.close()
+
+# -- Copilot: the database holds the metadata, events.jsonl the conversation.
+# The `turns` table lags behind a live session, so verbose reads the stream.
+CP_HOME = os.path.join(HOME, ".copilot")
+CP_SESSION = "7b2e91a4-0d63-4f85-ae27-1c9b5d3086fa"
+os.makedirs(os.path.join(CP_HOME, "session-state", CP_SESSION), exist_ok=True)
+
+cp = sqlite3.connect(os.path.join(CP_HOME, "session-store.db"))
+cp.executescript("""
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, host_type TEXT,
+    branch TEXT, summary TEXT, created_at TEXT, updated_at TEXT);
+CREATE TABLE turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL, user_message TEXT, assistant_response TEXT,
+    timestamp TEXT);
+""")
+cp.execute(
+    "INSERT INTO sessions (id, cwd, branch, summary, created_at, updated_at)"
+    " VALUES (?,?,?,?,?,?)",
+    (CP_SESSION, WEBHOOKS, "main", "Explain the 504 connection leak",
+     iso(322), iso(318)))
+cp.commit()
+cp.close()
+
+CP_EVENTS = [
+    ("session.start", {"sessionId": CP_SESSION, "copilotVersion": "1.0.98",
+                       "context": {"cwd": WEBHOOKS}}),
+    ("user.message", {"content": "Why does the delivery worker hold connections "
+                                 "open after a 504?",
+                      "transformedContent": "<current_datetime/>\n\nWhy does the "
+                                            "delivery worker hold connections open "
+                                            "after a 504?"}),
+    ("assistant.message", {"model": "claude-haiku-4.5", "content":
+        "Because the response body is only closed on the success path.\n\n"
+        "`deliver` defers `resp.Body.Close()` inside the `if resp.StatusCode < 500` "
+        "branch, so a 504 returns before the defer is registered and the connection "
+        "is never released back to the pool. Moving the defer above the status check "
+        "fixes it."}),
+    ("session.usage_record", {"usage": {"model": "claude-haiku-4.5",
+                                        "inputTokens": 9_140, "outputTokens": 288,
+                                        "cacheReadTokens": 24_000, "cacheWriteTokens": 0,
+                                        "cost": 0.0094, "duration": 6_210}}),
+]
+with open(os.path.join(CP_HOME, "session-state", CP_SESSION, "events.jsonl"), "w") as f:
+    for n, (kind, data) in enumerate(CP_EVENTS):
+        f.write(json.dumps({"type": kind, "timestamp": iso(322 - n),
+                            "id": f"ev{n}", "parentId": None, "data": data}) + "\n")
+
+# The two directories the other agents worked in have to exist, or the tree has
+# nothing to read when one of their sessions is opened.
+os.makedirs(WEBHOOKS, exist_ok=True)
+open(os.path.join(WEBHOOKS, "delivery.go"), "w").write(
+    """package webhooks
+
+import "time"
+
+const maxBackoff = time.Minute
+
+// backoff is how long to wait before retrying a failed delivery.
+func backoff(attempt int) time.Duration {
+\td := time.Duration(1<<attempt) * time.Second
+\tif d > maxBackoff {
+\t\treturn maxBackoff
+\t}
+\treturn d
+}
+""")
+
 print("wrote", PROJECT_DIR)
 print("session lines:", len(lines), "| agent lines:", len(agent_lines))
+print("codex:", CODEX_HOME, "| opencode:", OC_DIR, "| copilot:", CP_HOME)

@@ -60,7 +60,7 @@ type SessionInfo struct {
 	Model     string
 	CWD       string
 	GitBranch string
-	Source    string // "claude", "opencode" or "codex"
+	Source    string // "claude", "opencode", "codex" or "copilot"
 
 	// Set on a subagent run: the session that spawned it, and the agent type
 	// it ran as ("scout", "general-purpose", ...).
@@ -387,8 +387,29 @@ type ProjectInfo struct {
 	TotalCostUSD                                                 float64
 	FirstSession, LastSession                                    time.Time
 
+	// TotalTokensReported carries what a source that records no breakdown
+	// said instead: Codex reports one number per thread. Without it a
+	// project's total is short by every Codex session in it.
+	TotalTokensReported int
+
+	// Sources is every tool whose sessions are in this project, sorted, and
+	// SourceSessions counts them. A project is a DIRECTORY, and more than one
+	// agent works in the same one — one here already holds OpenCode and
+	// Copilot sessions together.
+	Sources        []string
+	SourceSessions map[string]int
+
 	MostEditedFiles []FileEditCount // sorted desc by count
 	Sessions        []SessionInfo   // sorted desc by LastUpdate
+}
+
+// TotalTokens is every token this project's sessions reported. The breakdown
+// and the single-number sources are added together rather than chosen between:
+// TokensTotal is only ever set by a source that has no breakdown, so there is
+// nothing to double-count.
+func (p ProjectInfo) TotalTokens() int {
+	return p.TotalInputTokens + p.TotalOutputTokens +
+		p.TotalCacheReadTokens + p.TotalCacheWriteTokens + p.TotalTokensReported
 }
 
 // FileEditCount tracks how many times a file was edited across sessions.

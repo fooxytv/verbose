@@ -8,8 +8,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A terminal UI for browsing and analyzing [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
-[Codex](https://developers.openai.com/codex/cli) and [OpenCode](https://opencode.ai)
-session transcripts.
+[Codex](https://developers.openai.com/codex/cli),
+[GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/about-copilot-cli)
+and [OpenCode](https://opencode.ai) session transcripts.
 
 Verbose reads the session data these agents store locally and presents it in a single
 interactive, color-coded viewer with real-time updates — and hands any of them
@@ -22,13 +23,14 @@ back to its own CLI to carry on.
 
 ## Features
 
-- Browse Claude Code, Codex and OpenCode sessions across projects, side by side
+- Browse Claude Code, Codex, Copilot and OpenCode sessions across projects, side by side
 - Subagent runs appear inline in their parent's timeline, at the call that
   launched them — and separately, so you can see what one run cost
-- Sessions are listed by what they are about, not by ID — OpenCode's and
-  Codex's own titles, or the opening prompt for Claude Code
+- Sessions are listed by what they are about, not by ID — the title Codex,
+  Copilot and OpenCode each generate, or the opening prompt for Claude Code
 - `c` resumes any of them in the right CLI: `claude --resume`,
-  `codex resume`, `opencode --session`
+  `codex resume`, `copilot --resume`, `opencode --session`
+- A project is a directory, so the project view says which agents worked in it
 - Event timeline with color-coded entries (prompts, tool calls, thinking, results)
 - Detailed event drill-down with diff highlighting for file edits
 - Session summary with token usage breakdown and activity stats
@@ -44,12 +46,19 @@ back to its own CLI to carry on.
 
 ## What it looks like
 
-**Every session across every project**, by what it is about rather than by id.
-`◦` marks a subagent run, `◈` an OpenCode session, `✦` a Codex thread. A subagent sits **under the
-session that spawned it**, joined by `├─` and `└─`, so one piece of work reads
-as one block instead of rows scattered by timestamp.
+**Every session across every project**, by what it is about rather than by id,
+whichever agent wrote it: `●` Claude Code, `✦` Codex, `◈` OpenCode, `▪`
+Copilot, and `◦` a subagent run. A subagent sits **under the session that
+spawned it**, joined by `├─` and `└─`, so one piece of work reads as one block
+instead of rows scattered by timestamp.
 
 ![sessions](docs/img/sessions.png)
+
+**A project is a directory**, and more than one agent can work in it — so the
+project view (`p`) marks which ones did, and counts the sessions each
+contributed.
+
+![project](docs/img/project.png)
 
 **Replay** (`R`) plays a session back at reading speed, typing the code out as
 it was written, syntax highlighted. Under the progress bar sits the directory
@@ -80,6 +89,12 @@ session had just applied.
 
 ![editor](docs/img/editor.png)
 
+**Every source replays the same way.** This is a Codex thread, which records a
+new file as content rather than as a diff — so the replay types the whole
+document out, and the tree beside it counts the file as new.
+
+![codex](docs/img/codex.png)
+
 Each row keeps its **own** cost, tokens and churn — a parent is not a total of
 its children. Summing the column still counts every run exactly once, which is
 what the project view relies on.
@@ -96,6 +111,9 @@ At least one of:
 - **Codex** — threads are read from the two SQLite databases under
   `~/.codex` (`$CODEX_HOME` if set): `state_N.sqlite` for the metadata,
   `thread_history_N.sqlite` for the content
+- **GitHub Copilot CLI** — sessions are read from `~/.copilot`:
+  `session-store.db` for the metadata, `session-state/<id>/events.jsonl` for
+  the conversation
 - **OpenCode** — sessions are read from its database, normally
   `~/.local/share/opencode/opencode.db`
 
@@ -159,9 +177,10 @@ verbose
 verbose -project myapp
 verbose -project /path/to/project
 
-# Point at an OpenCode database or a Codex home in a non-standard location
+# Point at a store in a non-standard location
 verbose -opencode /path/to/opencode.db
 verbose -codex /path/to/codex-home
+verbose -copilot /path/to/copilot-home
 ```
 
 ### JSON output
@@ -178,16 +197,18 @@ verbose -json session <id>              # one session's detail and todos
 verbose -json session -events <id>      # ...including its event timeline
 ```
 
-Each session carries a `source` (`claude`, `codex` or `opencode`) and a
-`costBasis` saying where its cost came from: `recorded` for OpenCode, which
-stores real spend, `estimated` for Claude Code, which stores only tokens, and
-`none` for Codex, which stores neither a cost nor a token breakdown to derive
-one from. `totalTokens` is always filled: the breakdown summed, or the single
-number Codex reports. A subagent run also carries `isAgent`, its `agentType`,
-and the `parentSessionId` it belongs to.
+Each session carries a `source` (`claude`, `codex`, `copilot` or `opencode`)
+and a `costBasis` saying where its cost came from: `recorded` for OpenCode and
+Copilot, which both store real spend, `estimated` for Claude Code, which stores
+only tokens, and `none` for Codex, which stores neither a cost nor a token
+breakdown to derive one from. `totalTokens` is always filled: the breakdown
+summed, or the single number Codex reports. A subagent run also carries
+`isAgent`, its `agentType`, and the `parentSessionId` it belongs to.
 
-In the session list Claude Code sessions are marked `●`, OpenCode `◈` and
-Codex `✦`.
+A project carries `sources`, every tool whose sessions are in that directory.
+
+In the session list Claude Code sessions are marked `●`, Codex `✦`, OpenCode
+`◈` and Copilot `▪`.
 
 ## Keybindings
 
@@ -546,8 +567,9 @@ place in them stay on screen.
 
 An empty reply is a plain resume, which is what `c` has always done. Claude
 sessions resume with `claude --resume <id> "<reply>"`; Codex with
-`codex resume <id> "<reply>"`; OpenCode with
-`opencode --session <id> --prompt "<reply>"`.
+`codex resume <id> "<reply>"`; Copilot with
+`copilot --resume <id> --interactive "<reply>"` (`--prompt` would run the reply
+and exit); OpenCode with `opencode --session <id> --prompt "<reply>"`.
 
 The reply is handed to the CLI rather than run inside verbose. Verbose reads
 transcripts; running a session in-process would mean carrying a PTY and an ANSI
@@ -626,6 +648,15 @@ file it touched, an `mcpToolCall` as `mcp__<server>__<tool>`. A thread's
 reasoning is **not** recoverable — the content array is empty on every item on
 disk, and only some keep a one-line summary.
 
+Copilot splits a session the other way about: `session-store.db` holds the
+metadata and one row per turn, while `session-state/<id>/events.jsonl` holds
+the conversation as a typed event stream. The database's `turns` table lags —
+a live session can hold a whole conversation in its events file while `turns`
+still reports nothing — so the stream wins wherever there is one, and `turns`
+is the fallback for a run hosted by GitHub, which never writes a state
+directory. Copilot is the only source here that records both a full token
+breakdown and a real price, in a `session.usage_record` per turn.
+
 OpenCode instead keeps every project's sessions in one SQLite database, with a row per
 message and a row per content part. Verbose reads it read-only, reassembles each session's
 transcript, and polls for changes. Tool calls are mapped onto the same vocabulary as Claude
@@ -648,10 +679,10 @@ shell API call that verbose does not make, so files land in
 `%USERPROFILE%\.local\share\Trash\files` instead. They are recoverable, just
 not through the usual restore.
 
-Codex sessions **cannot be deleted from verbose**. A thread lives across two
-databases Codex itself holds open and its CLI has no delete to hand the job to,
-so pressing `d` says so rather than asking a question whose yes could not be
-honoured.
+Codex and Copilot sessions **cannot be deleted from verbose**. Each lives in a
+database the agent itself holds open, and neither CLI has a delete to hand the
+job to — `copilot sessions` offers only `import`. Pressing `d` says so rather
+than asking a question whose yes could not be honoured.
 
 OpenCode sessions live as rows in one shared SQLite database, which is unsafe to write
 to underneath a running OpenCode. Deletion is handed to `opencode session delete`, so it
