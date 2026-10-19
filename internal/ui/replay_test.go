@@ -2408,3 +2408,123 @@ func TestScrollingUpFromAFollowingFrameStaysPut(t *testing.T) {
 		t.Errorf("↑ showed %q as the top row, want the line above %q", after[0], first)
 	}
 }
+
+// Play after a pause carries on; it does not retype the step. Watching the
+// same two hundred lines appear again is the opposite of what pausing to read
+// them was for.
+func TestPlayResumesWhereItPaused(t *testing.T) {
+	m := typingModel(t)
+	at := m.replayTyped
+
+	res, _ := m.handleKey(namedKey(tea.KeySpace))
+	paused := res.(Model)
+	if paused.replayPlaying {
+		t.Fatal("space should pause")
+	}
+	if paused.replayTyped != -1 {
+		t.Errorf("a paused step shows %d characters, want all of it", paused.replayTyped)
+	}
+
+	res, _ = paused.handleKey(namedKey(tea.KeySpace))
+	playing := res.(Model)
+	if !playing.replayPlaying {
+		t.Fatal("space should play again")
+	}
+	if playing.replayTyped != at {
+		t.Errorf("playing resumed at %d characters, want %d — the step restarted",
+			playing.replayTyped, at)
+	}
+}
+
+// The mark belongs to the step it was made on. Pausing, moving on, then
+// playing must start the new step at its beginning rather than halfway
+// through it.
+func TestPlayAfterMovingStartsTheNewStepFromTheTop(t *testing.T) {
+	m := typingModel(t)
+	// THREE steps, and the move lands on the middle one. With two, moving
+	// reaches the last step and the run-out branch restarts the replay, which
+	// clears the mark for its own reasons — so the test would pass however
+	// the mark itself behaved.
+	m.replaySteps = append(m.replaySteps, m.replaySteps[0], m.replaySteps[0])
+
+	res, _ := m.handleKey(namedKey(tea.KeySpace))
+	paused := res.(Model)
+	if paused.replayPausedTyped <= 0 {
+		t.Fatal("the pause recorded no position")
+	}
+
+	res, _ = paused.handleKey(namedKey(tea.KeyRight))
+	moved := res.(Model)
+	if moved.replayIndex != 1 {
+		t.Fatalf("right went to step %d, want 2", moved.replayIndex+1)
+	}
+
+	res, _ = moved.handleKey(namedKey(tea.KeySpace))
+	playing := res.(Model)
+	if playing.replayTyped != 0 {
+		t.Errorf("the new step started %d characters in, want 0", playing.replayTyped)
+	}
+}
+
+// Scrolling pauses too, so it has to leave the same mark: the arrows are how
+// you look back at something that just went past.
+func TestScrollingThenPlayingAlsoResumes(t *testing.T) {
+	m := typingModel(t)
+	at := m.replayTyped
+
+	res, _ := m.handleKey(namedKey(tea.KeyUp))
+	scrolled := res.(Model)
+	if scrolled.replayPlaying {
+		t.Fatal("an arrow should pause")
+	}
+
+	res, _ = scrolled.handleKey(namedKey(tea.KeySpace))
+	playing := res.(Model)
+	if playing.replayTyped != at {
+		t.Errorf("playing resumed at %d characters, want %d", playing.replayTyped, at)
+	}
+}
+
+// "On the last step" and "finished" are different states. Pausing halfway
+// through the last step and pressing play has to finish it, not throw the
+// reader back to step 1 — which is what the run-out branch did, because being
+// on the last step was the whole of its test.
+func TestPauseOnTheLastStepDoesNotRestartTheReplay(t *testing.T) {
+	m := typingModel(t)
+	// Three steps, and the cursor on the last of them.
+	m.replaySteps = append(m.replaySteps, m.replaySteps[0], m.replaySteps[0])
+	m.replayIndex = 2
+	at := m.replayTyped
+
+	res, _ := m.handleKey(namedKey(tea.KeySpace))
+	paused := res.(Model)
+	res, _ = paused.handleKey(namedKey(tea.KeySpace))
+	playing := res.(Model)
+
+	if playing.replayIndex != 2 {
+		t.Errorf("play jumped to step %d, want to stay on the last one",
+			playing.replayIndex+1)
+	}
+	if playing.replayTyped != at {
+		t.Errorf("playing resumed at %d characters, want %d", playing.replayTyped, at)
+	}
+}
+
+// A mark left on an earlier step is not a reason to stay at the end: that step
+// is long past, and the replay really has run out.
+func TestPlayAtTheEndWithAStaleMarkStartsAgain(t *testing.T) {
+	m := typingModel(t)
+	m.replaySteps = append(m.replaySteps, m.replaySteps[0], m.replaySteps[0])
+	m.replayIndex = 2
+	m.replayPlaying = false
+	m.replayTyped = -1
+	// Paused on step 1 earlier, then moved to the end by hand.
+	m.replayPausedStep, m.replayPausedTyped = 0, 500
+
+	res, _ := m.handleKey(namedKey(tea.KeySpace))
+	again := res.(Model)
+	if again.replayIndex != 0 || again.replayTyped != 0 {
+		t.Errorf("play at the end resumed at step %d, %d characters — want the top",
+			again.replayIndex+1, again.replayTyped)
+	}
+}

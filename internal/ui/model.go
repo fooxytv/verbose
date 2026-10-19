@@ -105,6 +105,13 @@ type Model struct {
 	// out. -1 means "all of it", which is what a paused step shows: a reader
 	// who has stopped to look wants the whole diff, not a half-written one.
 	replayTyped int
+	// Where the typing had reached when it was interrupted, and which step
+	// that was. Pressing play carries on from there rather than retyping a
+	// step you have already watched most of. The step is recorded with it
+	// because a pause followed by a move to another step must not resume
+	// halfway through THAT one.
+	replayPausedStep  int
+	replayPausedTyped int
 	// replayLive keeps playback alive at the end of a session that is still
 	// being written, so a running agent can be followed at reading speed.
 	// Falling behind is expected and reported, not corrected.

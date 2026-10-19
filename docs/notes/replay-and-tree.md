@@ -37,6 +37,20 @@ which is also what makes `↑` mean the line above the one being read rather
 than the top of the file. The lines above the cursor are identical whether the
 rest is revealed or not, so the same offset keeps the same top row.
 
+**And play carries on from there.** Pressing play reset the typing to zero, so
+a step you had paused two hundred lines into started again from its first
+character — the opposite of what pausing to read it was for.
+`replayMarkPause` records how far it had reached and `replayResumeFrom`
+picks it up, for the arrows and the wheel as well as for space.
+
+The mark belongs to ONE step, and two things invalidate it: moving to another
+step, and the run-out branch that starts the session again. That branch was
+also wrong on its own: "on the last step" and "finished" are different states,
+and pausing halfway through the last step used to throw the reader back to
+step 1. It now restarts only when there is no pause to resume — and clears the
+mark when it does, because the restart lands on step 1, which is exactly the
+step a mark from the beginning of the session sits on.
+
 A second key for it — the obvious `shift+space` — would have been dead on
 arrival: bubbletea has no such key name, a shifted space arrives as a plain
 one, and the same key would have had to do both jobs anyway.

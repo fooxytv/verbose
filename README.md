@@ -233,7 +233,7 @@ In the replay view:
 
 | Key | Action |
 |-----|--------|
-| `Space` | Play / pause — a pause holds the line you stopped on |
+| `Space` | Play / pause — a pause holds the line you stopped on, and play carries on from there |
 | `Right` | Finish typing this step, or move to the next |
 | `Left` | Previous step |
 | `Up` / `Down` | Scroll — takes manual control and pauses |
