@@ -245,7 +245,7 @@ type sessionD struct {
 	ProjectDir  string `json:"projectDir"`
 	CWD         string `json:"cwd,omitempty"`
 	FilePath    string `json:"filePath,omitempty"`
-	Source      string `json:"source"`    // always named: claude | opencode | codex | copilot
+	Source      string `json:"source"`    // always named: claude | opencode | codex | copilot | pi
 	CostBasis   string `json:"costBasis"` // recorded | estimated | estimated-fallback | none
 	Model       string `json:"model,omitempty"`
 	GitBranch   string `json:"gitBranch,omitempty"`

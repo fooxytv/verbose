@@ -207,6 +207,8 @@ func AgentName(source string) string {
 		return "Codex"
 	case "copilot":
 		return "Copilot"
+	case "pi":
+		return "pi"
 	}
 	// Claude Code's parser never sets Source, so an empty one is Claude.
 	return "Claude"

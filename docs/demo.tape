@@ -1,6 +1,6 @@
 # VHS tape for the README recordings:  vhs docs/demo.tape
 #
-# Runs against a synthetic HOME built by docs/demo-data.py — four stores, one
+# Runs against a synthetic HOME built by docs/demo-data.py — five stores, one
 # per agent verbose reads — and never the real one. This repository is public,
 # and a real transcript carries project names, file paths, prompts and code
 # that have no business in a demo.
@@ -42,8 +42,8 @@ Sleep 2.5s
 Screenshot docs/img/sessions.png
 
 # The marker in the first column says which agent did the work: `●` Claude
-# Code, `✦` Codex, `◈` OpenCode, `▪` Copilot, `◦` a subagent under its parent.
-# All four are in this list on purpose — that is the thing to see here.
+# Code, `✦` Codex, `◈` OpenCode, `▪` Copilot, `▴` pi, `◦` a subagent under its
+# parent. All five are in this list on purpose — that is the thing to see.
 #
 # The shapes have to differ at THIS size, not just as code points: the first
 # Copilot marker was a hexagon, which renders beside ● as a slightly flattened

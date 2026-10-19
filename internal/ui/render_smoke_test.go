@@ -241,6 +241,62 @@ func TestRenderRealCopilotSessions(t *testing.T) {
 	t.Logf("rendered %d copilot sessions", len(sessions))
 }
 
+// And over the real pi home. pi is the only source that keeps its reasoning,
+// so it is the only one whose replay has a THINKING step with a body — a path
+// no other transcript on this machine reaches.
+func TestRenderRealPiSessions(t *testing.T) {
+	var sessions []*session.Session
+	for _, dir := range session.DefaultPiDirs() {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		parsed, err := session.ParsePiDir(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		sessions = append(sessions, parsed...)
+	}
+	if len(sessions) == 0 {
+		t.Skip("no pi sessions available")
+	}
+
+	for _, sess := range sessions {
+		if out := renderSessionOverview(sess, sess.Todos, false, 0, 120, 40); strings.TrimSpace(out) == "" {
+			t.Errorf("%s: empty overview", sess.Info.ID)
+		}
+		all := visibleEvents(sess, filterAll, "")
+		if out := renderSessionDetail(sess, all, 0, 120, 40, ""); strings.TrimSpace(out) == "" {
+			t.Errorf("%s: empty timeline", sess.Info.ID)
+		}
+		for i := range sess.Events {
+			renderEventDetail(sess.Events[i], 0, 120, 40)
+			formatEventLine(sess.Events[i], 116, sess.Info.CWD)
+		}
+
+		steps := session.BuildReplay(sess)
+		if len(steps) == 0 {
+			continue
+		}
+		stride := 1 + len(steps)/maxStepsPerSession
+		m := Model{mode: viewReplay, version: "0.0.0", selectedSession: sess}
+		m.replaySteps = steps
+		for _, sz := range []struct{ w, h int }{{120, 40}, {40, 10}} {
+			for i := 0; i < len(steps); i += stride {
+				v := m
+				v.width, v.height = sz.w, sz.h
+				v.replayIndex, v.replayTyped = i, -1
+				for n, row := range visibleLines(v.View()) {
+					if got := terminalColumns(row); got >= sz.w {
+						t.Fatalf("%s: step %d row %d draws %d columns at width %d\n  %q",
+							sess.Info.ID, i, n, got, sz.w, stripAnsi(row))
+					}
+				}
+			}
+		}
+	}
+	t.Logf("rendered %d pi sessions", len(sessions))
+}
+
 // maxStepsPerSession bounds the smoke sweep: enough steps to catch a layout
 // mistake anywhere in a session, few enough that the suite stays quick enough
 // to run on every change.

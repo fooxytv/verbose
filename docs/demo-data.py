@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build a synthetic HOME for the verbose demo recordings.
 
-Four stores, because verbose reads four agents and the demo is meant to show
+Five stores, because verbose reads five agents and the demo is meant to show
 that: Claude Code's JSONL transcripts, Codex's two SQLite databases, OpenCode's
-one, and Copilot's database plus event stream.
+one, Copilot's database plus event stream, and pi's file per session.
 
 Everything here is invented. The repo is public, so the demo must not show real
 session titles, client project names, file paths, code or costs.
@@ -762,6 +762,76 @@ with open(os.path.join(CP_HOME, "session-state", CP_SESSION, "events.jsonl"), "w
         f.write(json.dumps({"type": kind, "timestamp": iso(322 - n),
                             "id": f"ev{n}", "parentId": None, "data": data}) + "\n")
 
+# -- pi: a file per session under its own home, the closest layout to Claude
+# Code's. It is also the only source that keeps its reasoning, so this session
+# has a thinking block with something in it — which the replay shows as a
+# "pi's reasoning" step, the one step no other agent here can produce.
+PI_DIR = os.path.join(HOME, ".pi", "agent", "sessions", "--tmp-devdemo-notestore--")
+os.makedirs(PI_DIR, exist_ok=True)
+PI_SESSION = "3c8e1d60-74ab-4f29-9b15-6d20af7e5c83"
+
+PI_DIFF = "\n".join([
+    "     ...",
+    "  14   // Note is a single stored note.",
+    "  15   type Note struct {",
+    "- 16   \tID   string",
+    "+ 16   \tID        string",
+    "+ 17   \tUpdatedAt time.Time",
+    "  18   \tBody string",
+    "  19   }",
+])
+
+PI_ENTRIES = [
+    {"type": "session", "version": 3, "id": PI_SESSION,
+     "timestamp": iso(372), "cwd": CWD},
+    {"type": "model_change", "id": "m1", "parentId": None, "timestamp": iso(372),
+     "provider": "anthropic", "modelId": "claude-sonnet-4-6"},
+    {"type": "message", "id": "u1", "parentId": "m1", "timestamp": iso(371),
+     "message": {"role": "user", "timestamp": int((NOW - timedelta(minutes=371)).timestamp() * 1000),
+                 "content": [{"type": "text",
+                              "text": "Notes come back without any sense of when they changed. "
+                                      "Add an UpdatedAt and set it on write."}]}},
+    {"type": "message", "id": "a1", "parentId": "u1", "timestamp": iso(370),
+     "message": {"role": "assistant", "model": "claude-sonnet-4-6", "provider": "anthropic",
+                 "timestamp": int((NOW - timedelta(minutes=370)).timestamp() * 1000),
+                 "usage": {"input": 8420, "output": 310, "cacheRead": 21000,
+                           "cacheWrite": 1200, "cost": {"total": 0.0418}},
+                 "content": [
+                     {"type": "thinking",
+                      "text": "", "thinking":
+                          "The Note struct is the only place the shape is defined, so adding the "
+                          "field there is enough for the API to carry it.\n\nThe memory store "
+                          "writes through Put, which is the single write path — setting the "
+                          "timestamp anywhere else would miss the ones that go straight to the "
+                          "map. Put it in Put."},
+                     {"type": "text",
+                      "text": "`Put` is the only write path, so the timestamp belongs there "
+                              "rather than in each caller."},
+                     {"type": "toolCall", "id": "pi-edit-1", "name": "edit",
+                      "arguments": {"path": f"{CWD}/internal/store/store.go",
+                                    "oldText": "\tID   string",
+                                    "newText": "\tID        string\n\tUpdatedAt time.Time"}},
+                 ]}},
+    {"type": "message", "id": "r1", "parentId": "a1", "timestamp": iso(369),
+     "message": {"role": "toolResult", "toolCallId": "pi-edit-1", "toolName": "edit",
+                 "isError": False,
+                 "timestamp": int((NOW - timedelta(minutes=369)).timestamp() * 1000),
+                 "details": {"diff": PI_DIFF, "firstChangedLine": 16},
+                 "content": [{"type": "text",
+                              "text": f"Successfully replaced text in {CWD}/internal/store/store.go"}]}},
+    {"type": "message", "id": "a2", "parentId": "r1", "timestamp": iso(368),
+     "message": {"role": "assistant", "model": "claude-sonnet-4-6", "provider": "anthropic",
+                 "timestamp": int((NOW - timedelta(minutes=368)).timestamp() * 1000),
+                 "usage": {"input": 9100, "output": 120, "cacheRead": 24000,
+                           "cacheWrite": 0, "cost": {"total": 0.0231}},
+                 "content": [{"type": "text",
+                              "text": "`Note` now carries `UpdatedAt`, stamped in `Put`. The "
+                                      "handler needs no change — it marshals the struct whole."}]}},
+]
+with open(os.path.join(PI_DIR, f"2026-10-19T19-36-36-239Z_{PI_SESSION}.jsonl"), "w") as f:
+    for e in PI_ENTRIES:
+        f.write(json.dumps(e) + "\n")
+
 # The two directories the other agents worked in have to exist, or the tree has
 # nothing to read when one of their sessions is opened.
 os.makedirs(WEBHOOKS, exist_ok=True)
@@ -784,4 +854,5 @@ func backoff(attempt int) time.Duration {
 
 print("wrote", PROJECT_DIR)
 print("session lines:", len(lines), "| agent lines:", len(agent_lines))
-print("codex:", CODEX_HOME, "| opencode:", OC_DIR, "| copilot:", CP_HOME)
+print("codex:", CODEX_HOME, "| opencode:", OC_DIR, "| copilot:", CP_HOME,
+      "| pi:", PI_DIR)

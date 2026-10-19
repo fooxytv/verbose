@@ -34,6 +34,7 @@ func main() {
 	opencode := flag.String("opencode", "", "path to an OpenCode database (defaults to ~/.local/share/opencode/opencode.db)")
 	codex := flag.String("codex", "", "path to a Codex home (defaults to $CODEX_HOME, else ~/.codex)")
 	copilot := flag.String("copilot", "", "path to a Copilot home (defaults to ~/.copilot)")
+	piHome := flag.String("pi", "", "path to a pi home (defaults to ~/.pi)")
 	jsonKind := flag.String("json", "", "print JSON instead of opening the UI: "+strings.Join(jsonout.Kinds, " | "))
 	jsonEvents := flag.Bool("events", false, "include the event timeline in -json session output")
 	jsonLimit := flag.Int("limit", 0, "cap how many sessions -json returns (0 = no cap)")
@@ -54,6 +55,9 @@ func main() {
 	}
 	if *copilot != "" {
 		store.AddCopilotDir(*copilot)
+	}
+	if *piHome != "" {
+		store.AddPiDir(*piHome)
 	}
 
 	// Initial scan of all sessions

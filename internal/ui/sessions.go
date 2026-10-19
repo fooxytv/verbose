@@ -89,10 +89,15 @@ func nestConnector(sessions []session.SessionInfo, i int) string {
 // ✦ U+2726 and ▪ U+25AA are also not ambiguous-width, unlike ● and ◈, which
 // were already on screen before that rule existed.
 //
-// The shapes have to differ, not just the code points. ⬢ U+2B22 was the first
-// choice for Copilot and renders as a slightly flattened circle: beside ●, at
-// the size these are actually read at, the two were the same marker. A square
-// next to a circle cannot be mistaken.
+// The shapes have to differ, not just the code points, and that is checked by
+// looking at a recording rather than by reasoning about code points. ⬢ U+2B22
+// was the first choice for Copilot and renders as a slightly flattened circle;
+// ✚ U+271A was the first for pi and is a four-armed cross, which beside ✦ is
+// another four-armed glyph. Both were the same marker as their neighbour at
+// the size these are actually read at.
+//
+// What is left is five different SHAPES: circle, star, diamond, square,
+// triangle.
 //
 // It is one function because the session list and the project header have to
 // agree: a marker that means OpenCode in one place and nothing in the other is
@@ -105,6 +110,8 @@ func sourceMarker(source string) string {
 		return "✦"
 	case "copilot":
 		return "▪"
+	case "pi":
+		return "▴"
 	}
 	return "●"
 }

@@ -26,6 +26,7 @@ func TestResumeArgsPerSource(t *testing.T) {
 		{"oc-ses_abc", "opencode", []string{"--session", "ses_abc"}},
 		{"cx-01a0397e", "codex", []string{"resume", "01a0397e"}},
 		{"cp-91fff27a", "copilot", []string{"--resume", "91fff27a"}},
+		{"pi-f029accf", "pi", []string{"--session", "f029accf"}},
 	}
 	for _, c := range cases {
 		cli, args := resumeArgs(c.id)
@@ -51,6 +52,8 @@ func TestContinueArgsPerSource(t *testing.T) {
 		// exit, which is the opposite of continuing.
 		{"cp-abc", "carry on", "copilot", []string{"--resume", "abc", "--interactive", "carry on"}},
 		{"cp-abc", "", "copilot", []string{"--resume", "abc"}},
+		// pi names the session with a flag and takes messages as bare args.
+		{"pi-abc", "carry on", "pi", []string{"--session", "abc", "carry on"}},
 	}
 	for _, c := range cases {
 		cli, args := continueArgs(c.id, c.prompt)
@@ -66,13 +69,13 @@ func TestContinueArgsPerSource(t *testing.T) {
 // is a layout bug waiting for the wrong terminal. ● and ◈ are ambiguous and
 // were already on screen before the rule existed; nothing new may be.
 func TestSourceMarkersAreNotAmbiguousWidth(t *testing.T) {
-	for source, want := range map[string]string{"codex": "✦", "copilot": "▪"} {
+	for source, want := range map[string]string{"codex": "✦", "copilot": "▪", "pi": "▴"} {
 		row := formatSessionLine(session.SessionInfo{Source: source}, 80, "")
 		if !strings.Contains(row, want) {
 			t.Errorf("a %s session is not marked with %s:\n%s", source, want, row)
 		}
 	}
-	for _, r := range []rune("✦▪") {
+	for _, r := range []rune("✦▪▴") {
 		if w := runewidth.RuneWidth(r); w != 1 {
 			t.Errorf("U+%04X is %d columns wide, want 1", r, w)
 		}
