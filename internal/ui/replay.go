@@ -932,14 +932,25 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			// Stopping to look means you want the whole step, not a half-typed
 			// one — and you want it still showing the line you stopped on.
 			m.replayScroll = m.replayFreezeScroll()
+			m.replayMarkPause()
 			m.replayTyped = -1
 			return m, nil
 		}
-		if m.replayIndex >= len(m.replaySteps)-1 {
-			m.replayIndex = 0 // play from the top once it has run out
+		// Play from the top once it has run out — but "on the last step" and
+		// "finished" are not the same thing. Pausing halfway through the last
+		// step and pressing play should finish it, not throw the reader back
+		// to step 1. A mark left on some EARLIER step is not a reason to stay:
+		// that one is long past, and the replay really has run out.
+		resuming := m.replayPausedTyped > 0 && m.replayPausedStep == m.replayIndex
+		if m.replayIndex >= len(m.replaySteps)-1 && !resuming {
+			m.replayIndex = 0
 			m.replayScroll = 0
+			// Starting again invalidates the mark, and leaving it would apply
+			// it to whatever step the restart lands on — which is step 1, the
+			// very step a mark from the beginning of the session is on.
+			m.replayPausedTyped = 0
 		}
-		m.replayTyped = 0
+		m.replayTyped = m.replayResumeFrom()
 		m.replayStepAt = time.Now()
 
 		// Pressing play is an explicit "watch this again", so the tree follows
@@ -1133,9 +1144,36 @@ func (m *Model) replayTakeOver() {
 	// a following frame means "the line I can see", and ↑ means the one above
 	// it.
 	m.replayScroll = m.replayFreezeScroll()
+	m.replayMarkPause()
 	m.replayPlaying = false
 	m.replayTyped = -1
 	m.replayGen++
+}
+
+// replayMarkPause remembers how far the typing had reached, so pressing play
+// carries on instead of retyping the step from its first character. Watching
+// the same two hundred lines appear again is the opposite of what pausing to
+// read them was for.
+func (m *Model) replayMarkPause() {
+	if m.replayTyped > 0 {
+		m.replayPausedStep, m.replayPausedTyped = m.replayIndex, m.replayTyped
+		return
+	}
+	// Paused before anything was typed, or on a step that types nothing:
+	// there is no position to come back to.
+	m.replayPausedTyped = 0
+}
+
+// replayResumeFrom is where typing picks up, and clears the mark as it goes.
+// It only applies to the step the pause happened on: moving elsewhere and
+// pressing play must start that step at its beginning.
+func (m *Model) replayResumeFrom() int {
+	from := 0
+	if m.replayPausedTyped > 0 && m.replayPausedStep == m.replayIndex {
+		from = m.replayPausedTyped
+	}
+	m.replayPausedTyped = 0
+	return from
 }
 
 // replayFreezeScroll is where the viewport actually is at this moment.
