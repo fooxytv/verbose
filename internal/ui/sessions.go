@@ -9,11 +9,19 @@ import (
 )
 
 // renderSessionsList renders the sessions list view.
-func renderSessionsList(sessions []session.SessionInfo, cursor int, width, height int) string {
+//
+// matches is empty unless a search is narrowing the list, in which case it
+// says why each row survived — keyed by session id.
+func renderSessionsList(sessions []session.SessionInfo, matches map[string]session.Match,
+	query string, cursor int, width, height int) string {
 	var b strings.Builder
 
 	// Header
 	header := headerStyle.Render(fmt.Sprintf(" verbose — Sessions (%d)", len(sessions)))
+	if query != "" {
+		header += "  " + searchPromptStyle.Render(" "+truncateRunes(query, 24)+" ") +
+			mutedStyle.Render("  esc to clear")
+	}
 	if legend := sourceLegend(sessions); legend != "" {
 		header += "  " + legend
 	}
@@ -53,6 +61,11 @@ func renderSessionsList(sessions []session.SessionInfo, cursor int, width, heigh
 
 	for i := start; i < end; i++ {
 		s := sessions[i]
+		// A row whose TITLE did not match has to say what did, or a result
+		// list is a list of sessions with no stated reason for being there.
+		if mt, ok := matches[s.ID]; ok && mt.Kind != "" && mt.Kind != "title" {
+			s.Title = mt.Kind + ": " + mt.Snippet
+		}
 		line := formatSessionLine(s, width, nestConnector(sessions, i))
 
 		if i == cursor {

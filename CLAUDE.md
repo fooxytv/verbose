@@ -382,6 +382,27 @@ Nothing else goes through it: every other `Detail` is a sentence
 - Resume is `pi --session <id>`, with messages as bare arguments. Deleting
   needs nothing special: one file, trashed like Claude Code's.
 
+## Searching the whole history
+
+`pkg/session/search.go`, `/` in the sessions list.
+
+- **There is no index and does not need to be one.** Every session is already
+  parsed and in memory; 18,000 events across 62 sessions scan in 12ms, well
+  inside a 30ms frame. An index would be a cache to invalidate for no gain.
+- **A match has to say WHY.** A result list that only narrows is a list of
+  sessions with no stated reason for being there, so each row shows the kind
+  (`prompt`, `reply`, `file`, `command`) and the line the needle was on.
+- **A Claude session's title IS its first prompt**, so a needle there matches
+  as `title`, not `prompt`. A `prompt` match means a LATER prompt — which is
+  the case the search exists for.
+- **The snippet is bounded around the match**, not the first N characters of
+  the line: a pasted log or a minified file is one enormous line and the
+  needle is usually nowhere near its start.
+- **A query that matches nothing restores the list** and says so. An empty
+  screen looks like the sessions have gone.
+- Opening a result carries the query into the timeline and points the cursor
+  at the hit, so finding and reading are one move rather than two searches.
+
 ## Source markers
 
 `sourceMarker` in `internal/ui/sessions.go` is the single place the glyph for a

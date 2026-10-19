@@ -1244,6 +1244,14 @@ func (m *Model) jumpTimelineToReplayStep() {
 	// target would land the cursor somewhere unrelated.
 	m.resetTimelineFilter()
 	m.autoFollow = false
+	m.pointAtEvent(target)
+}
+
+// pointAtEvent puts the timeline cursor on an event by its index in
+// sess.Events, through whatever filter is applied — detailCursor indexes the
+// FILTERED list, so the position has to be looked up rather than assigned. An
+// event the filter hides leaves the cursor at the top.
+func (m *Model) pointAtEvent(target int) {
 	for i, idx := range m.visibleEvents() {
 		if idx == target {
 			m.detailCursor = i
