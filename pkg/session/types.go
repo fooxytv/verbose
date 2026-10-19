@@ -60,7 +60,7 @@ type SessionInfo struct {
 	Model     string
 	CWD       string
 	GitBranch string
-	Source    string // "claude", "opencode", "codex" or "copilot"
+	Source    string // "claude", "opencode", "codex", "copilot" or "pi"
 
 	// Set on a subagent run: the session that spawned it, and the agent type
 	// it ran as ("scout", "general-purpose", ...).

@@ -33,6 +33,10 @@ type Store struct {
 	cpDirs      map[string]time.Time // tracked Copilot homes: dir → last mtime
 	cpExtraDirs []string             // explicitly specified Copilot homes
 
+	// pi keeps a file per session like Claude Code, but under its own home.
+	piDirs      map[string]time.Time // tracked pi homes: dir → newest mtime
+	piExtraDirs []string             // explicitly specified pi homes
+
 	// relinks rewrite the paths of sessions whose folder was renamed or moved,
 	// applied as each one loads. See relink.go.
 	relinks Relinks
@@ -59,6 +63,7 @@ func NewStore() (*Store, error) {
 		ocDBs:    make(map[string]time.Time),
 		cxDirs:   make(map[string]time.Time),
 		cpDirs:   make(map[string]time.Time),
+		piDirs:   make(map[string]time.Time),
 	}
 	// A broken links file must not stop verbose opening: the sessions are
 	// still readable, only with their recorded paths.
@@ -80,6 +85,11 @@ func (s *Store) AddCodexDir(path string) {
 // AddCopilotDir adds an explicit Copilot home to scan.
 func (s *Store) AddCopilotDir(path string) {
 	s.cpExtraDirs = append(s.cpExtraDirs, path)
+}
+
+// AddPiDir adds an explicit pi home to scan.
+func (s *Store) AddPiDir(path string) {
+	s.piExtraDirs = append(s.piExtraDirs, path)
 }
 
 // Scan discovers all sessions from the Claude projects directory.
@@ -128,6 +138,9 @@ func (s *Store) Scan() error {
 
 	// And for Copilot homes
 	s.scanCopilotDirs()
+
+	// And for pi homes
+	s.scanPiDirs()
 
 	// Every transcript is loaded by now, so subagent runs can be anchored back
 	// into the sessions that launched them.
@@ -518,6 +531,74 @@ func copilotMtime(dir string) (time.Time, bool) {
 	return newest, true
 }
 
+// scanPiDirs discovers and parses pi homes.
+func (s *Store) scanPiDirs() {
+	dirs := make(map[string]bool)
+	for _, d := range s.piExtraDirs {
+		dirs[d] = true
+	}
+	for _, d := range DefaultPiDirs() {
+		dirs[d] = true
+	}
+
+	for dir := range dirs {
+		s.loadPiDir(dir)
+	}
+}
+
+// loadPiDir parses one pi home into the store.
+func (s *Store) loadPiDir(dir string) bool {
+	mtime, ok := piMtime(dir)
+	if !ok {
+		return false
+	}
+	sessions, err := ParsePiDir(dir)
+	if err != nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.piDirs[dir] = mtime
+	for _, sess := range sessions {
+		s.relinks.Apply(sess)
+		s.sessions[sess.Info.ID] = sess
+	}
+	return true
+}
+
+// piMtime is the newest modification time among a home's session files. The
+// sessions directory's own mtime only moves when a file is added, not when a
+// live session is appended to — and a live session is the one worth noticing.
+func piMtime(dir string) (time.Time, bool) {
+	root := filepath.Join(dir, "agent", "sessions")
+	projects, err := os.ReadDir(root)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	var newest time.Time
+	for _, p := range projects {
+		if !p.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, p.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			info, err := f.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(newest) {
+				newest = info.ModTime()
+			}
+		}
+	}
+	return newest, true
+}
+
 // How long to wait after a write before re-parsing, and the longest a file may
 // stay dirty while being written to continuously. Without the second bound, an
 // agent that writes more often than the debounce interval would never trigger a
@@ -598,6 +679,10 @@ func (s *Store) Watch() <-chan struct{} {
 
 	// And Copilot homes
 	go s.watchCopilot()
+
+	// And pi homes, whose files fsnotify would report but whose directory is
+	// outside the watched tree
+	go s.watchPi()
 
 	return s.updates
 }
@@ -707,6 +792,39 @@ func (s *Store) watchCopilot() {
 				continue
 			}
 			if s.loadCopilotDir(dir) {
+				changed = true
+			}
+		}
+
+		if changed {
+			select {
+			case s.updates <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// watchPi polls tracked pi homes.
+func (s *Store) watchPi() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.mu.RLock()
+		tracked := make(map[string]time.Time, len(s.piDirs))
+		for dir, mtime := range s.piDirs {
+			tracked[dir] = mtime
+		}
+		s.mu.RUnlock()
+
+		changed := false
+		for dir, lastMtime := range tracked {
+			mtime, ok := piMtime(dir)
+			if !ok || !mtime.After(lastMtime) {
+				continue
+			}
+			if s.loadPiDir(dir) {
 				changed = true
 			}
 		}

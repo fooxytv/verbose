@@ -1,6 +1,6 @@
 # verbose
 
-A terminal UI for reading Claude Code, Codex, Copilot and OpenCode session
+A terminal UI for reading Claude Code, Codex, Copilot, OpenCode and pi session
 transcripts. Go, bubbletea, lipgloss. No CGo anywhere — `modernc.org/sqlite`
 for the Codex, Copilot and OpenCode databases, `chroma` for syntax
 highlighting.
@@ -14,6 +14,7 @@ Longer notes that would bloat this file live in [docs/notes](docs/notes):
 the [OpenCode database schema](docs/notes/opencode-database.md), the
 [Codex databases](docs/notes/codex-databases.md), the
 [Copilot store](docs/notes/copilot-store.md), the
+[pi sessions](docs/notes/pi-sessions.md), the
 [store and watcher traps](docs/notes/store-and-watcher.md), and
 [why the replay and tree are shaped as they are](docs/notes/replay-and-tree.md).
 
@@ -357,17 +358,43 @@ Nothing else goes through it: every other `Detail` is a sentence
 - Resume is `copilot --resume <id>`, and `--interactive "<reply>"` to send a
   first message with it. **Not `--prompt`**, which runs the reply and exits.
 
+## Reading a pi session
+
+`pkg/session/pi.go`. Full format in
+[docs/notes/pi-sessions.md](docs/notes/pi-sessions.md).
+
+- **One JSONL file per session**, under `~/.pi/agent/sessions/<encoded cwd>/`.
+  The encoded name has the same hyphen-versus-separator ambiguity Claude
+  Code's does, so the `session` entry's `cwd` is what is used.
+- **It is the only source that keeps its reasoning.** 47 of 47 thinking
+  blocks have their full text, where Claude Code's are always empty and Codex
+  keeps a headline on 39% of them. That is what fills a `pi's reasoning` step.
+- **The edit diff is the one pi DISPLAYED**, not a unified one: numbered
+  lines, no `@@`, runs separated by an elision. The number is right-aligned in
+  a field that follows the file, so a three-digit line has no space after the
+  marker (`-100`) where a two-digit one does (`- 86`) — a pattern expecting a
+  separator drops every line past 99.
+- **A result is a separate message**, keyed by `toolCallId`, and is folded
+  back into its call so one operation stays one event.
+- **Timestamps are milliseconds on the message and ISO 8601 on the entry**
+  around it, on the same line.
+- `usage` is a full breakdown AND a price, per message.
+- Resume is `pi --session <id>`, with messages as bare arguments. Deleting
+  needs nothing special: one file, trashed like Claude Code's.
+
 ## Source markers
 
 `sourceMarker` in `internal/ui/sessions.go` is the single place the glyph for a
 source lives, because the session list and the project header have to agree.
 
-- **The SHAPES have to differ, not just the code points.** `⬢` U+2B22 passed
-  every rule — width 1, not ambiguous — and renders as a slightly flattened
-  circle: beside `●`, at the size these are actually read at, it was the same
-  marker. The recording is what showed it; a unit test never could. `▪` U+25AA
-  is a square and cannot be mistaken for anything else here.
-- `●` claude, `✦` codex, `◈` opencode, `▪` copilot, `◦` a subagent.
+- **The SHAPES have to differ, not just the code points**, and that is checked
+  by looking at a recording. Twice now a glyph passed every rule — width 1,
+  not ambiguous — and was still the same marker as its neighbour: `⬢` U+2B22
+  renders as a slightly flattened circle beside `●`, and `✚` U+271A is a
+  four-armed cross beside `✦`, another four-armed glyph. A unit test cannot
+  see either.
+- `●` claude, `✦` codex, `◈` opencode, `▪` copilot, `▴` pi, `◦` a subagent —
+  five different shapes: circle, star, diamond, square, triangle.
 - **A project is a DIRECTORY**, so it carries a SET of markers. One directory
   on this machine already holds OpenCode and Copilot sessions, and the demo's
   synthetic tree has one with three agents in it.

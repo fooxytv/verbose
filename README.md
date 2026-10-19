@@ -9,8 +9,9 @@
 
 A terminal UI for browsing and analyzing [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
 [Codex](https://developers.openai.com/codex/cli),
-[GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/about-copilot-cli)
-and [OpenCode](https://opencode.ai) session transcripts.
+[GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/about-copilot-cli),
+[OpenCode](https://opencode.ai) and [pi](https://github.com/badlogic/pi-mono)
+session transcripts.
 
 Verbose reads the session data these agents store locally and presents it in a single
 interactive, color-coded viewer with real-time updates — and hands any of them
@@ -23,13 +24,14 @@ back to its own CLI to carry on.
 
 ## Features
 
-- Browse Claude Code, Codex, Copilot and OpenCode sessions across projects, side by side
+- Browse Claude Code, Codex, Copilot, OpenCode and pi sessions across projects, side by side
 - Subagent runs appear inline in their parent's timeline, at the call that
   launched them — and separately, so you can see what one run cost
 - Sessions are listed by what they are about, not by ID — the title Codex,
   Copilot and OpenCode each generate, or the opening prompt for Claude Code
+  and pi
 - `c` resumes any of them in the right CLI: `claude --resume`,
-  `codex resume`, `copilot --resume`, `opencode --session`
+  `codex resume`, `copilot --resume`, `opencode --session`, `pi --session`
 - A project is a directory, so the project view says which agents worked in it
 - Event timeline with color-coded entries (prompts, tool calls, thinking, results)
 - Detailed event drill-down with diff highlighting for file edits
@@ -48,7 +50,7 @@ back to its own CLI to carry on.
 
 **Every session across every project**, by what it is about rather than by id,
 whichever agent wrote it: `●` Claude Code, `✦` Codex, `◈` OpenCode, `▪`
-Copilot, and `◦` a subagent run. A subagent sits **under the session that
+Copilot, `▴` pi, and `◦` a subagent run. A subagent sits **under the session that
 spawned it**, joined by `├─` and `└─`, so one piece of work reads as one block
 instead of rows scattered by timestamp.
 
@@ -114,6 +116,7 @@ At least one of:
 - **GitHub Copilot CLI** — sessions are read from `~/.copilot`:
   `session-store.db` for the metadata, `session-state/<id>/events.jsonl` for
   the conversation
+- **pi** — one JSONL file per session under `~/.pi/agent/sessions/`
 - **OpenCode** — sessions are read from its database, normally
   `~/.local/share/opencode/opencode.db`
 
@@ -181,6 +184,7 @@ verbose -project /path/to/project
 verbose -opencode /path/to/opencode.db
 verbose -codex /path/to/codex-home
 verbose -copilot /path/to/copilot-home
+verbose -pi /path/to/pi-home
 ```
 
 ### JSON output
@@ -197,7 +201,8 @@ verbose -json session <id>              # one session's detail and todos
 verbose -json session -events <id>      # ...including its event timeline
 ```
 
-Each session carries a `source` (`claude`, `codex`, `copilot` or `opencode`)
+Each session carries a `source` (`claude`, `codex`, `copilot`, `opencode` or
+`pi`)
 and a `costBasis` saying where its cost came from: `recorded` for OpenCode and
 Copilot, which both store real spend, `estimated` for Claude Code, which stores
 only tokens, and `none` for Codex, which stores neither a cost nor a token
@@ -208,7 +213,7 @@ summed, or the single number Codex reports. A subagent run also carries
 A project carries `sources`, every tool whose sessions are in that directory.
 
 In the session list Claude Code sessions are marked `●`, Codex `✦`, OpenCode
-`◈` and Copilot `▪`.
+`◈`, Copilot `▪` and pi `▴`.
 
 ## Keybindings
 
@@ -567,7 +572,8 @@ place in them stay on screen.
 
 An empty reply is a plain resume, which is what `c` has always done. Claude
 sessions resume with `claude --resume <id> "<reply>"`; Codex with
-`codex resume <id> "<reply>"`; Copilot with
+`codex resume <id> "<reply>"`; pi with `pi --session <id> "<reply>"`;
+Copilot with
 `copilot --resume <id> --interactive "<reply>"` (`--prompt` would run the reply
 and exit); OpenCode with `opencode --session <id> --prompt "<reply>"`.
 
@@ -647,6 +653,13 @@ newest pair wins. Items map onto the same vocabulary as everything else: a
 file it touched, an `mcpToolCall` as `mcp__<server>__<tool>`. A thread's
 reasoning is **not** recoverable — the content array is empty on every item on
 disk, and only some keep a one-line summary.
+
+pi keeps one JSONL file per session, the closest layout to Claude Code's, and
+is the only source that **keeps its reasoning**: every thinking block has its
+full text, where Claude Code's are signed but always empty and Codex keeps a
+one-line summary at best. Its edit diffs are the ones pi displayed rather than
+unified ones — numbered lines, no `@@` headers — and are parsed back into
+hunks so the diff view works the same.
 
 Copilot splits a session the other way about: `session-store.db` holds the
 metadata and one row per turn, while `session-state/<id>/events.jsonl` holds

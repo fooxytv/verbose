@@ -165,6 +165,15 @@ func continueArgs(id, prompt string) (cli string, args []string) {
 		return "copilot", args
 	}
 
+	// pi names the session with a flag and takes messages as bare arguments.
+	if piID, ok := strings.CutPrefix(id, "pi-"); ok {
+		args = []string{"--session", piID}
+		if prompt != "" {
+			args = append(args, prompt)
+		}
+		return "pi", args
+	}
+
 	args = []string{"--resume", id}
 	if prompt != "" {
 		args = append(args, prompt)
