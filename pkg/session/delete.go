@@ -35,10 +35,17 @@ func (s *Store) DeleteSession(id string) (DeleteOutcome, error) {
 
 	var out DeleteOutcome
 	var err error
-	if sess.Info.Source == "opencode" {
+	switch sess.Info.Source {
+	case "opencode":
 		err = deleteOpenCodeSession(sess.Info)
 		out.Permanent = true
-	} else {
+	case "codex":
+		// A Codex thread lives across two SQLite databases that Codex itself
+		// holds open, and its CLI has no delete to hand the job to. Editing
+		// them underneath it is how a history gets corrupted, so this says no
+		// rather than guessing.
+		return DeleteOutcome{}, fmt.Errorf("codex sessions cannot be deleted from verbose")
+	default:
 		out.Trashed, err = trashClaudeSession(sess.Info)
 	}
 	if err != nil {

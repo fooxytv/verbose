@@ -943,6 +943,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		// Ask before removing anything: deletion touches real files.
 		if target := m.deleteTarget(); target != nil {
+			// Codex has no delete to delegate to, so say so here rather than
+			// asking a question whose yes cannot be honoured.
+			if target.Source == "codex" {
+				m.statusMsg = "Codex sessions cannot be deleted from verbose"
+				return m, clearStatusAfter()
+			}
 			m.confirmDelete = target
 		}
 

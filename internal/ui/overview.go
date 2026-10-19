@@ -48,16 +48,20 @@ func renderSessionOverview(sess *session.Session, todos []session.TodoItem, hasP
 
 	// Token breakdown
 	lines = append(lines, sectionHeader("Token Usage"))
-	totalTokens := info.InputTokens + info.OutputTokens + info.CacheReadTokens + info.CacheWriteTokens
+	totalTokens := info.TotalTokens()
 	lines = append(lines, fieldLine("Total Tokens", tokenStyle.Render(formatTokensComma(totalTokens))))
-	lines = append(lines, fieldLine("  Input", formatTokensComma(info.InputTokens)))
-	lines = append(lines, fieldLine("  Output", formatTokensComma(info.OutputTokens)))
-	lines = append(lines, fieldLine("  Cache Read", formatTokensComma(info.CacheReadTokens)))
-	lines = append(lines, fieldLine("  Cache Write", formatTokensComma(info.CacheWriteTokens)))
-	lines = append(lines, fieldLine("API Equiv.", costStyle.Render(fmt.Sprintf("$%.4f", info.CostUSD))+dimStyle.Render(" (not actual cost on Max plan)")))
 
-	// Token bar visualization
-	if totalTokens > 0 {
+	// Codex reports one number per thread and no split. Four rows of zero, a
+	// cost of $0.0000 derived from them and an empty bar all read as a bug
+	// rather than as an absence, so a source without a breakdown shows the
+	// total alone.
+	if breakdown := info.InputTokens + info.OutputTokens +
+		info.CacheReadTokens + info.CacheWriteTokens; breakdown > 0 {
+		lines = append(lines, fieldLine("  Input", formatTokensComma(info.InputTokens)))
+		lines = append(lines, fieldLine("  Output", formatTokensComma(info.OutputTokens)))
+		lines = append(lines, fieldLine("  Cache Read", formatTokensComma(info.CacheReadTokens)))
+		lines = append(lines, fieldLine("  Cache Write", formatTokensComma(info.CacheWriteTokens)))
+		lines = append(lines, fieldLine("API Equiv.", costStyle.Render(fmt.Sprintf("$%.4f", info.CostUSD))+dimStyle.Render(" (not actual cost on Max plan)")))
 		lines = append(lines, "")
 		lines = append(lines, renderTokenBar(info, min(width-6, 60)))
 	}
@@ -204,6 +208,9 @@ func fieldLine(label, value string) string {
 	return fmt.Sprintf("    %s %s", dimStyle.Render(fmt.Sprintf("%-16s", label)), value)
 }
 
+// renderTokenBar draws the input/output/cache split. It sums the breakdown
+// rather than calling TotalTokens(): a source that reports only a total has
+// nothing to divide into segments, and must get no bar at all.
 func renderTokenBar(info session.SessionInfo, barWidth int) string {
 	total := info.InputTokens + info.OutputTokens + info.CacheReadTokens + info.CacheWriteTokens
 	if total == 0 || barWidth < 10 {

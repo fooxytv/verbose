@@ -87,6 +87,10 @@ func formatSessionLine(s session.SessionInfo, width int, connector string) strin
 	status := "●"
 	if s.Source == "opencode" {
 		status = "◈"
+	} else if s.Source == "codex" {
+		// ✦ U+2726 is width 1 and not ambiguous-width, unlike ● and ◈, which
+		// are already on screen and grandfathered in.
+		status = "✦"
 	} else if s.IsAgent {
 		status = "◦"
 	}
@@ -98,7 +102,7 @@ func formatSessionLine(s session.SessionInfo, width int, connector string) strin
 	status = connector + status
 
 	ago := timeAgo(s.LastUpdate)
-	totalTokens := s.InputTokens + s.OutputTokens + s.CacheReadTokens + s.CacheWriteTokens
+	totalTokens := s.TotalTokens()
 	tokenStr := formatTokens(totalTokens)
 	costStr := fmt.Sprintf("$%.4f", s.CostUSD)
 

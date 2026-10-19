@@ -24,20 +24,34 @@ func launchInTerminal(cli string, args []string, cwd string) tea.Cmd {
 	return launchInPlace(cli, args, cwd)
 }
 
-// resumeSessionCmd returns a tea.Cmd that resumes a session. The two CLIs spell
-// it differently: claude takes --resume, opencode takes --session.
+// resumeSessionCmd returns a tea.Cmd that resumes a session. Every CLI spells
+// it differently: claude takes --resume, opencode takes --session, and codex
+// takes a resume subcommand with the id as a bare argument.
 func resumeSessionCmd(sessionID, cwd string) tea.Cmd {
+	cli, args := resumeArgs(sessionID)
+	return launchInTerminal(cli, args, cwd)
+}
+
+// resumeArgs is kept apart from launching so that what gets run can be
+// asserted rather than taken on trust.
+func resumeArgs(sessionID string) (cli string, args []string) {
 	if id, ok := strings.CutPrefix(sessionID, "oc-"); ok {
-		return launchInTerminal("opencode", []string{"--session", id}, cwd)
+		return "opencode", []string{"--session", id}
 	}
-	return launchInTerminal("claude", []string{"--resume", sessionID}, cwd)
+	if id, ok := strings.CutPrefix(sessionID, "cx-"); ok {
+		return "codex", []string{"resume", id}
+	}
+	return "claude", []string{"--resume", sessionID}
 }
 
 // newSessionCmd starts a fresh CLI session (no --resume) in the same CWD.
 func newSessionCmd(source, cwd string) tea.Cmd {
 	cli := "claude"
-	if source == "opencode" {
+	switch source {
+	case "opencode":
 		cli = "opencode"
+	case "codex":
+		cli = "codex"
 	}
 	return launchInTerminal(cli, nil, cwd)
 }
@@ -45,8 +59,11 @@ func newSessionCmd(source, cwd string) tea.Cmd {
 // forkSessionCmd starts a new CLI session with the last prompt as the first message.
 func forkSessionCmd(source, cwd, lastPrompt string) tea.Cmd {
 	prompt := "Continue from previous session:\n\n" + lastPrompt
-	if source == "opencode" {
+	switch source {
+	case "opencode":
 		return launchInTerminal("opencode", []string{"--prompt", prompt}, cwd)
+	case "codex":
+		return launchInTerminal("codex", []string{prompt}, cwd)
 	}
 	return launchInTerminal("claude", []string{prompt}, cwd)
 }

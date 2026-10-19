@@ -32,6 +32,7 @@ func main() {
 
 	project := flag.String("project", "", "filter to a specific project name")
 	opencode := flag.String("opencode", "", "path to an OpenCode database (defaults to ~/.local/share/opencode/opencode.db)")
+	codex := flag.String("codex", "", "path to a Codex home (defaults to $CODEX_HOME, else ~/.codex)")
 	jsonKind := flag.String("json", "", "print JSON instead of opening the UI: "+strings.Join(jsonout.Kinds, " | "))
 	jsonEvents := flag.Bool("events", false, "include the event timeline in -json session output")
 	jsonLimit := flag.Int("limit", 0, "cap how many sessions -json returns (0 = no cap)")
@@ -46,6 +47,9 @@ func main() {
 
 	if *opencode != "" {
 		store.AddOpenCodeDB(*opencode)
+	}
+	if *codex != "" {
+		store.AddCodexDir(*codex)
 	}
 
 	// Initial scan of all sessions

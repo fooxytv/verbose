@@ -144,6 +144,16 @@ func continueArgs(id, prompt string) (cli string, args []string) {
 		return "opencode", args
 	}
 
+	// Codex resumes through a subcommand, and takes the opening prompt as a
+	// second bare argument after the thread id.
+	if cxID, ok := strings.CutPrefix(id, "cx-"); ok {
+		args = []string{"resume", cxID}
+		if prompt != "" {
+			args = append(args, prompt)
+		}
+		return "codex", args
+	}
+
 	args = []string{"--resume", id}
 	if prompt != "" {
 		args = append(args, prompt)

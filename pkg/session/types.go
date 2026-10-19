@@ -22,6 +22,13 @@ type SessionInfo struct {
 	CacheWriteTokens int
 	CostUSD          float64
 
+	// TokensTotal is for a source that reports one number and no breakdown.
+	// Codex records tokens_used per thread and nothing finer, so the split
+	// cannot be shown and must not be invented: putting a total in the input
+	// column would make the overview draw a bar claiming it was all input.
+	// TotalTokens() prefers the breakdown and falls back to this.
+	TokensTotal int
+
 	// Activity summary
 	EventCount    int
 	ToolCallCount int
@@ -53,7 +60,7 @@ type SessionInfo struct {
 	Model     string
 	CWD       string
 	GitBranch string
-	Source    string // "claude" or "opencode"
+	Source    string // "claude", "opencode" or "codex"
 
 	// Set on a subagent run: the session that spawned it, and the agent type
 	// it ran as ("scout", "general-purpose", ...).
@@ -75,6 +82,17 @@ type Session struct {
 	// separate directory and they are loaded on demand; OpenCode stores them in
 	// the session database, so they arrive already parsed.
 	Todos []TodoItem
+}
+
+// TotalTokens is every token a session reported. A source that records the
+// input/output/cache split is summed; one that records only a total gives
+// that. Every view showing a total goes through here so the two cannot
+// disagree.
+func (i SessionInfo) TotalTokens() int {
+	if n := i.InputTokens + i.OutputTokens + i.CacheReadTokens + i.CacheWriteTokens; n > 0 {
+		return n
+	}
+	return i.TokensTotal
 }
 
 // EventType classifies what kind of event occurred.

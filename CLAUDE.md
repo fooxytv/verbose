@@ -1,8 +1,8 @@
 # verbose
 
-A terminal UI for reading Claude Code and OpenCode session transcripts. Go,
-bubbletea, lipgloss. No CGo anywhere — `modernc.org/sqlite` for OpenCode's
-database, `chroma` for syntax highlighting.
+A terminal UI for reading Claude Code, Codex and OpenCode session transcripts.
+Go, bubbletea, lipgloss. No CGo anywhere — `modernc.org/sqlite` for the Codex
+and OpenCode databases, `chroma` for syntax highlighting.
 
 `AGENTS.md` is a symlink to this file, so Codex and anything else following the
 cross-tool convention reads the same document. Claude Code reads `CLAUDE.md`
@@ -11,6 +11,7 @@ file serves both — edit this one.
 
 Longer notes that would bloat this file live in [docs/notes](docs/notes):
 the [OpenCode database schema](docs/notes/opencode-database.md), the
+[Codex databases](docs/notes/codex-databases.md), the
 [store and watcher traps](docs/notes/store-and-watcher.md), and
 [why the replay and tree are shaped as they are](docs/notes/replay-and-tree.md).
 
@@ -168,6 +169,39 @@ Verified against real data; each of these cost a bug to learn.
   the OLD project directory, and records the new `cwd` on the lines it adds.
   So a renamed folder needs nothing moved; only verbose's reading of the paths
   is stale, which is what `verbose relink` fixes.
+
+## Reading a Codex thread
+
+`pkg/session/codex.go`. Full schema and counts in
+[docs/notes/codex-databases.md](docs/notes/codex-databases.md); these are the
+ones that bite.
+
+- **Two databases, and the number in the name is a schema generation.**
+  `state_N.sqlite` has the metadata, `thread_history_N.sqlite` the content;
+  both are globbed and the highest `N` wins, because `state_4` beside `state_5`
+  is the schema Codex migrated away from. A home with one of the pair is
+  unreadable, not half-readable.
+- **`name` is the title, `title` is the opening message** — verbatim, often
+  thousands of characters of pasted context or an XML delegation wrapper.
+- **A `fileChange`'s `diff` is content for an `add` and hunks for an
+  `update`**, which is Claude Code's Write-input-versus-structuredPatch split
+  in a single field. An add has to arrive as a `Write` carrying `content` or
+  `stepCode` has nothing to type.
+- **Reasoning is a headline at best.** `content` is empty on every item on
+  disk and `summary` is set on 39% of them. Drop the empty ones.
+- **A failed command is knowable only from `status`** — it writes its reason
+  into the same `aggregatedOutput` a successful one uses.
+- **`source` is a string or JSON.** `{"subagent":{"other":"guardian"}}` is what
+  makes a thread an agent; `thread_source` says how a thread was *started*
+  (`voice_chat`, `chatgpt_handoff`) and is NOT an agent type.
+- **A threads row exists before anything happens in it**, so a row with no
+  items is not a session.
+- **`tokens_used` is a single number**, which is why `SessionInfo.TokensTotal`
+  and `TotalTokens()` exist. Never fake it into the input column: the
+  overview's bar would claim it was all input.
+- **Codex sessions cannot be deleted**, and `d` says so rather than asking.
+- Resume is `codex resume <id> [prompt]` — a subcommand, with the id as a bare
+  argument.
 
 ## Relinking a renamed folder
 
