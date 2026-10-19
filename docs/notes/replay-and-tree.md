@@ -28,6 +28,19 @@ keystroke; nine kilobytes of log output does not.
 **Pausing or scrolling reveals the whole step.** Stopping to look means you want
 to read it, not watch it.
 
+**And it holds the frame where it is.** The follow is an override computed by
+the renderer and never written back, so the stored scroll was still 0 from the
+start of the step: letting go of the override threw the frame back to the
+step's first line. You pressed space on the output you wanted and it left the
+screen. `replayFreezeScroll` adopts the position on the way into a pause,
+which is also what makes `↑` mean the line above the one being read rather
+than the top of the file. The lines above the cursor are identical whether the
+rest is revealed or not, so the same offset keeps the same top row.
+
+A second key for it — the obvious `shift+space` — would have been dead on
+arrival: bubbletea has no such key name, a shifted space arrives as a plain
+one, and the same key would have had to do both jobs anyway.
+
 ## The tree
 
 **Structure from disk, marks from the transcript.** Two different kinds of

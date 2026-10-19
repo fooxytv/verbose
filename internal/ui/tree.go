@@ -853,13 +853,12 @@ func padPane(s string, width int) string {
 // the terminal cannot take both.
 func renderSplit(m Model) string {
 	side := sidebarWidth(m.width)
+	// The divider costs three columns between the panes; replayPaneSize knows
+	// it, and the pause handler reads the same geometry from there.
+	main, rows := m.replayPaneSize()
 	if side == 0 {
-		return renderReplay(m.replayViewState(m.width, m.height))
+		return renderReplay(m.replayViewState(main, rows))
 	}
-
-	// The divider costs three columns between the panes.
-	main := usableWidth(m.width) - side - 3
-	rows := max(1, m.height-1)
 
 	tree := renderTree(m.treeViewState(side, rows))
 	replay := renderReplay(m.replayViewState(main, rows))
