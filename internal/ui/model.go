@@ -138,6 +138,12 @@ type Model struct {
 	// A step number being typed at the "/" prompt, as in "/24".
 	replayGotoTyping bool
 	replayGotoDraft  string
+
+	// replayFind is the needle a replay is being searched by, and replayHits
+	// the step indices that match it. The hits are rebuilt with the step list
+	// rather than per frame: a search is a keypress, not a render.
+	replayFind string
+	replayHits []int
 	// replayGen invalidates ticks scheduled before a pause, a manual step or a
 	// speed change. Without it a stale tick would advance a second step.
 	replayGen int
@@ -497,7 +503,18 @@ func (m Model) View() string {
 		helpKeys = append(helpKeys,
 			helpKey{"tab", codeLabel},
 			helpKey{"+/-", "speed"},
-			helpKey{"/", "go to step"},
+			helpKey{"/", "step/find"},
+		)
+		if len(m.replayHits) > 0 {
+			// Directly behind the key that opened the search: with matches on
+			// screen this is the key being pressed, and the footer drops from
+			// the END — further down it fell off a 120-column terminal. Only
+			// while a search is open, because n is the plain step forward
+			// until there is something to step through.
+			helpKeys = append(helpKeys,
+				helpKey{"n/N", fmt.Sprintf("match %d", len(m.replayHits))})
+		}
+		helpKeys = append(helpKeys,
 			helpKey{"a", "agents"},
 			// After "go to step", which is pressed far more often: the footer
 			// drops from the end, and at a narrow width this is the key worth
@@ -1130,10 +1147,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "R":
-		// Replay the session one step at a time.
+		// Replay the session one step at a time, from wherever the reader is
+		// — the timeline cursor, or a search hit in the list. Asked before
+		// startReplay, which moves the cursor itself.
 		if sess := m.sessionInContext(); sess != nil {
+			at := m.replayEntryEvent(sess)
 			m.startReplay(sess)
-			return m, m.replayAdvanceCmd()
+			m.openReplayAt(at)
+			return m, tea.Batch(m.replayAdvanceCmd(), clearStatusAfter())
 		}
 
 	case "/":

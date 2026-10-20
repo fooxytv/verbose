@@ -42,6 +42,11 @@ back to its own CLI to carry on.
 - `u` in a replay shows only the work that did **not** last — the steps whose
   code is no longer in the files, which is otherwise invisible unless you
   remember it existed
+- `/` in a replay finds a step by what it ran, wrote or printed — a long
+  session is too long to step through, and the output is the only place an
+  outcome lives
+- A replay opens where you are: on the step the timeline cursor points at, or
+  on the search hit you followed into the session
 - Live auto-follow mode — watch sessions update in real time
 - Mouse scroll support
 - Filter by project name
@@ -63,8 +68,9 @@ instead of rows scattered by timestamp.
 session was about; it cannot show what was *in* it, and most of a history is
 older than the week you remember. A search reaches prompts, replies, file
 paths and commands, says which of those matched each row, and carries the
-query into the timeline so the session opens on the hit. There is no index —
-scanning 18,000 events takes 12ms, well inside a frame.
+query into the timeline so the session opens on the hit — and `R` from there
+starts the replay on that step rather than at the beginning. There is no
+index — scanning 18,000 events takes 12ms, well inside a frame.
 
 **A project is a directory**, and more than one agent can work in it — so the
 project view (`p`) marks which ones did, and counts the sessions each
@@ -246,7 +252,7 @@ In the session list Claude Code sessions are marked `●`, Codex `✦`, OpenCode
 | `/` | Search **every** session — prompts, replies, files and commands, not just titles |
 | `d` | Delete session (asks to confirm) |
 | `s` | Toggle session summary |
-| `R` | Replay the session step by step |
+| `R` | Replay the session step by step, from wherever the cursor is |
 | `T` | Project tree, marked with what the session changed (works inside a replay too) |
 | `f` | Toggle auto-follow (timeline view) |
 | `r` | Refresh session list |
@@ -261,7 +267,8 @@ In the replay view:
 | `Left` | Previous step |
 | `Up` / `Down` | Scroll — takes manual control and pauses |
 | `+` / `-` | Faster / slower (0.5s to 15s per step) |
-| `/` | Go to a step by number — type `24`, press enter |
+| `/` | Go to a step by number, or find one — type `24` or `connection refused` |
+| `n` / `N` | Next / previous match (`n` steps forward when nothing is being searched) |
 | `a` / `A` | Switch to the next / previous subagent of this run, without leaving the replay |
 | `Tab` | Code only — just the steps that wrote something |
 | `u` | Lost work only — just the steps whose work is no longer in the files |
@@ -303,7 +310,18 @@ typed — a diff is worth following keystroke by keystroke, nine kilobytes of lo
 output is not.
 
 Pausing or scrolling hands control back to you and reveals the whole step at
-once, because stopping to look means you want to read it, not watch it.
+once, because stopping to look means you want to read it, not watch it. Play
+carries on from the character it stopped at, not from the top of the step.
+
+**The replay starts where you are.** `R` opens on the step the timeline cursor
+is pointing at, so a search hit you followed into a session, or a row you
+scrolled to, is the step the replay begins on rather than something to fast
+forward to. Leaving a replay with `Esc` or `t` leaves that cursor on the step
+that was showing, which is what makes pausing to look at something safe:
+coming back with `R` carries on from there instead of starting the session
+again. Opening a session and pressing `R` straight away still starts at step 1
+— the cursor is tracking the end of a possibly-live transcript then, not
+pointing at anything — and `0` is always the way back to the beginning.
 
 ### Reading a plan
 
@@ -325,6 +343,28 @@ paragraph, so a plan wraps to your terminal rather than to the width the agent
 happened to write it at. Shell text is left alone — `rm *.go *.md`,
 `snake_case_names` and `2*3*4` are not emphasis, and a plan that reads like a
 command is still one you can retype.
+
+### Searching a replay
+
+Sessions get long — the replays here reach four figures of steps — and stepping
+to the operation you remember is scrolling, not reading. `/` takes a needle as
+well as a step number: type `24` to go to step 24, or type anything that is not
+a number to find it. `n` and `N` move between the matches, wrapping at both
+ends, and the header says which match is on screen.
+
+**It searches more than the step shows.** A headline is a sentence verbose
+wrote — "Ran go test ./..." — but what a reader remembers is the command, the
+file, or what the command *printed*, and the output is the only place an
+outcome lives. So the needle is matched against the step's headline and
+explanation, the code it wrote, the file it touched, the prompt or reply behind
+it, the command, its output, and the error string a failed shell command leaves
+instead of a result. Searching `connection refused` or `exit code 127` finds
+the step that failed.
+
+A search that matches nothing leaves the replay where it is and says so,
+rather than clearing the search that was working. Digits are always a step
+number, which is the one thing the prompt cannot do both of — the number is by
+far the likelier intent.
 
 ### Finding the code
 
