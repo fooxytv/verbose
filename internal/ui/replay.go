@@ -98,11 +98,16 @@ type replayView struct {
 
 // lostMarker flags the line saying a step's work is no longer in the file.
 //
-// Not ✗ and not ⊘: the timeline already spends those on an error and a denial,
-// and this is neither. The step SUCCEEDED — the work simply is not there any
-// more. U+232B is width 1 and not ambiguous-width, which every glyph on screen
-// has to be.
-const lostMarker = "⌫"
+// A bar in the margin, not a symbol: ✗ and ⊘ are the timeline's error and
+// denial, and this is neither — the step SUCCEEDED and the work is simply not
+// there now. Two glyphs that said it better were tried on camera and failed
+// for reasons no unit test can see: ⌫ U+232B draws as an unreadable blob at
+// 13px, and ▌ U+258C is ambiguous-width, which is a layout bug waiting for
+// the wrong terminal. U+2590 is width 1, not ambiguous, and legible.
+//
+// It is also the markdown quote bar, which cannot collide: a plan writes no
+// files, so a plan step can never appear in this filter.
+const lostMarker = "▐"
 
 func renderReplay(v replayView) string {
 	sess, steps, idx := v.sess, v.steps, v.idx

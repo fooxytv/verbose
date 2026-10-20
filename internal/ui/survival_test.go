@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/fooxytv/verbose/pkg/session"
+	"github.com/mattn/go-runewidth"
 )
 
 func lostEdit(path string, lines ...string) session.Event {
@@ -212,5 +213,22 @@ func TestLostWorkEmptyStateExplainsItself(t *testing.T) {
 	}
 	if !strings.Contains(out, "u") {
 		t.Errorf("the empty state does not say how to get back:\n%s", out)
+	}
+}
+
+// The marker has to survive a terminal that is not this one. An
+// ambiguous-width glyph draws as two columns on a CJK-configured terminal,
+// and every row carrying it is then one column wider than anything measured
+// it to be — which wraps, and strands rows on screen.
+func TestLostMarkerIsOneUnambiguousColumn(t *testing.T) {
+	r := []rune(lostMarker)
+	if len(r) != 1 {
+		t.Fatalf("lostMarker = %q, want a single rune", lostMarker)
+	}
+	if w := runewidth.RuneWidth(r[0]); w != 1 {
+		t.Errorf("%q (U+%04X) is %d columns wide, want 1", lostMarker, r[0], w)
+	}
+	if runewidth.IsAmbiguousWidth(r[0]) {
+		t.Errorf("%q (U+%04X) is ambiguous-width; pick a glyph that is not", lostMarker, r[0])
 	}
 }

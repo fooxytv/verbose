@@ -136,6 +136,32 @@ Type ":q"
 Enter
 Sleep 2.5s
 
+# What of this session's work is still in the files. `u` keeps only the steps
+# whose work is gone, which here is three of twenty-one: the route the shell
+# registered, the test file the subagent wrote, and the error text the last
+# edit tidied. All three are back to what they were, and each step says so
+# under its headline.
+#
+# The subagent's one is worth having on camera: its turns are spliced into the
+# parent's timeline, so the filter reaches work the parent did not do itself.
+#
+# The sidebar closes first, so the step and its reason line have the whole
+# screen. The right-arrow moves one step on so the bar reads 2/3 rather than
+# 1/3 — the counter is what the frame is for, and any of the three steps says
+# the same thing, so which one it lands on does not matter.
+Type "T"
+Sleep 1.2s
+Type "u"
+Sleep 3s
+Right
+Sleep 2.5s
+Screenshot docs/img/lost-work.png
+Sleep 2.5s
+
+# Back to every step, so nothing after this depends on the filter being open.
+Type "u"
+Sleep 1.2s
+
 # Back out to the list, and into a thread another agent wrote. Codex records a
 # new file as content rather than as a diff, so the replay types the whole
 # OpenAPI document out — step 5, and `/` jumps straight to it rather than

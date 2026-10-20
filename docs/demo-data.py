@@ -434,6 +434,13 @@ type Store interface {
 }
 """
 
+# THREE OF THESE DELIBERATELY DISAGREE WITH THE TRANSCRIPT, and the `u` beat in
+# demo.tape is recording that disagreement: router.go has no `/notes/{id}` route,
+# store.go still says "note not found" rather than "store: note not found", and
+# store_test.go is a placeholder rather than what the subagent wrote. Each is
+# work the session recorded that is not in the file now, which is what the
+# lost-work filter exists to find. "Fixing" them to match the transcript would
+# empty that filter and the beat would record an empty screen.
 PROJECT_FILES = {
     "go.mod": "module notestore\n\ngo 1.25\n",
     "README.md": "# notestore\n\nA small notes API used to demonstrate verbose.\n",
