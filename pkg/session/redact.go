@@ -65,58 +65,76 @@ func gated(lower string, gates []string) bool {
 }
 
 type redactor struct {
+	// kind names the credential in a reader's words. It is here rather than
+	// in a second table so masking and FINDING cannot drift: a shape that
+	// redact knows how to hide is a shape `verbose secrets` knows to report.
+	kind  string
 	re    *regexp.Regexp
 	with  string
 	fn    func(string) string
 	gates []string
+
+	// rotate is where this kind of credential is revoked, when there is one
+	// place. A finding without an action is a worry rather than a task.
+	rotate string
 }
 
 var redactors = []redactor{
 	// A key block is the one case where the whole thing goes: the body is the
 	// secret and the armour is what makes it findable.
-	{re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
+	{kind: "private key", re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 		with:  "-----BEGIN PRIVATE KEY----- " + RedactedMark + " -----END PRIVATE KEY-----",
 		gates: []string{"-----begin "}},
 
 	// Azure. AccountKey is the one that actually appears here, and it arrives
 	// inside a connection string that is otherwise worth reading — the account
 	// name and the endpoint say which storage it was.
-	{re: regexp.MustCompile(`(?i)(AccountKey=)[A-Za-z0-9+/=]{16,}`), with: "${1}" + RedactedMark,
+	{kind: "azure storage key", rotate: "Azure portal → the storage account → Access keys → Rotate",
+		re: regexp.MustCompile(`(?i)(AccountKey=)[A-Za-z0-9+/=]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"accountkey="}},
-	{re: regexp.MustCompile(`(?i)(SharedAccessKey=)[A-Za-z0-9+/=]{16,}`), with: "${1}" + RedactedMark,
+	{kind: "azure shared access key", rotate: "Azure portal → the resource → Shared access policies",
+		re: regexp.MustCompile(`(?i)(SharedAccessKey=)[A-Za-z0-9+/=]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sharedaccesskey="}},
-	{re: regexp.MustCompile(`(?i)([?&]sig=)[A-Za-z0-9%+/=]{16,}`), with: "${1}" + RedactedMark,
+	{kind: "azure SAS signature", rotate: "Azure portal → rotate the signing key the SAS was issued from",
+		re: regexp.MustCompile(`(?i)([?&]sig=)[A-Za-z0-9%+/=]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sig="}},
 
 	// Tokens that announce themselves with a prefix. Every one of these is
 	// anchored with \b, which is the whole lesson of the measurement above:
 	// without it "task-" is an OpenAI key 255 times over.
-	{re: regexp.MustCompile(`\b(gh[pousr]_)[A-Za-z0-9]{20,}`), with: "${1}" + RedactedMark,
+	{kind: "github token", rotate: "https://github.com/settings/tokens",
+		re: regexp.MustCompile(`\b(gh[pousr]_)[A-Za-z0-9]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_"}},
-	{re: regexp.MustCompile(`\b(github_pat_)[A-Za-z0-9_]{20,}`), with: "${1}" + RedactedMark,
+	{kind: "github fine-grained token", rotate: "https://github.com/settings/personal-access-tokens",
+		re: regexp.MustCompile(`\b(github_pat_)[A-Za-z0-9_]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"github_pat_"}},
-	{re: regexp.MustCompile(`\b(sk-ant-)[A-Za-z0-9_-]{20,}`), with: "${1}" + RedactedMark,
+	{kind: "anthropic api key", rotate: "https://console.anthropic.com/settings/keys",
+		re: regexp.MustCompile(`\b(sk-ant-)[A-Za-z0-9_-]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sk-ant-"}},
-	{re: regexp.MustCompile(`\b(sk-)[A-Za-z0-9]{20,}`), with: "${1}" + RedactedMark,
+	{kind: "openai api key", rotate: "https://platform.openai.com/api-keys",
+		re: regexp.MustCompile(`\b(sk-)[A-Za-z0-9]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sk-"}},
-	{re: regexp.MustCompile(`\b(glpat-)[A-Za-z0-9_-]{16,}`), with: "${1}" + RedactedMark,
+	{kind: "gitlab token", rotate: "GitLab → Settings → Access tokens",
+		re: regexp.MustCompile(`\b(glpat-)[A-Za-z0-9_-]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"glpat-"}},
-	{re: regexp.MustCompile(`\b(xox[baprs]-)[A-Za-z0-9-]{10,}`), with: "${1}" + RedactedMark,
+	{kind: "slack token", rotate: "https://api.slack.com/apps → the app → OAuth & Permissions",
+		re: regexp.MustCompile(`\b(xox[baprs]-)[A-Za-z0-9-]{10,}`), with: "${1}" + RedactedMark,
 		gates: []string{"xox"}},
-	{re: regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), with: "AKIA" + RedactedMark,
+	{kind: "aws access key id", rotate: "AWS IAM → the user → Security credentials",
+		re: regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), with: "AKIA" + RedactedMark,
 		gates: []string{"akia"}},
 
 	// A JWT carries its own claims, so the header alone is enough to say what
 	// was there.
-	{re: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]+)?`),
+	{kind: "jwt", re: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]+)?`),
 		with: "eyJ" + RedactedMark, gates: []string{"eyj"}},
 
-	{re: regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{20,}`),
+	{kind: "bearer token", re: regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{20,}`),
 		with: "${1}" + RedactedMark, gates: []string{"bearer"}},
 
 	// Assignments need a decision rather than a replacement, because most of
 	// what sits to the right of `client_secret =` is not a secret.
-	{re: assignRe, fn: redactAssignment, gates: []string{
+	{kind: "assigned secret", re: assignRe, fn: redactAssignment, gates: []string{
 		"secret", "password", "passwd", "pwd", "api_key", "apikey", "api-key",
 		"access_token", "accesstoken", "access-token", "auth_token",
 		"authtoken", "auth-token",

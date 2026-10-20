@@ -490,6 +490,41 @@ session is read.
   eight call sites and a ninth thing to do per session is a ninth chance to
   miss one.
 
+## Reporting what to revoke
+
+`pkg/session/secrets.go`, `internal/secrets`, `verbose secrets`.
+
+- **This is the half that reduces risk.** `--redact` stops a credential
+  reaching a new audience; only rotation does anything about the copy already
+  on disk. The command exists because you cannot rotate what you do not know
+  is there.
+- **It reads the SAME table the redactor does.** `redactor.kind` is why, and
+  `TestEveryRedactedShapeIsAReportableKind` keeps it true: a shape verbose
+  knows how to hide must be one it knows to report, or it masks a credential
+  it never mentions.
+- **Never the value, ever.** Eight hex characters of SHA-256. The output is
+  meant to be pasted into a ticket, and a report that quotes the secret it
+  found has published it again.
+- **Fingerprint the VALUE, not the match.** `AccountKey=` and `accountkey=`
+  are one key to revoke, and the count of distinct values IS the number of
+  jobs.
+- **The triage is the product.** A list of things that look like secrets is a
+  worry; separating "revoke this" from "that expired on the 15th" is a task.
+  A JWT's payload is base64url of plain JSON by design, so the token says when
+  it died — most of what an agent handles is an hour-long access token.
+- **Known-public values are held by FINGERPRINT**, so this file contains no
+  key-shaped literal of its own. The azurite key was 18 of 21 "Azure keys" on
+  one real machine, and without the exception the three that mattered were
+  buried.
+- **Context is the matching LINE, and only a storage key may claim a storage
+  account.** Both were real bugs in one: searching the whole text put
+  "storage account stprod01" on a Slack token, and the line window alone still
+  let two connection strings swap accounts, which would send someone to rotate
+  the wrong key.
+- **Judgement calls are hidden unless asked for.** An assigned literal is
+  `possible`, not `rotate`, and `-all` is what shows it — one alarm that is
+  wrong costs the whole report its authority.
+
 ## Finding a step from the shell
 
 `internal/find`, `verbose find <text>`.
@@ -679,6 +714,17 @@ directly instead.
 - When a test is meant to catch a specific bug, **check it fails without the
   fix** before trusting it.
 
+## The README and docs
+
+The README is the shop window: what it does, the screenshots, install, usage.
+Everything longer lives in `docs/*.md` and is linked from the Documentation
+table — it reached 870 lines before this split and nobody reads that.
+
+- **User docs in `docs/`, implementation notes in `docs/notes/`.** The first
+  answers "how do I", the second "why is it like this".
+- A section moved out of the README keeps its prose and loses one heading
+  level, so the page title is the section name.
+
 ## Demo recordings
 
 `docs/demo.tape` (VHS) produces `docs/demo.gif` and `docs/img/*.png` for the
@@ -704,6 +750,15 @@ agent instead — the recording still produced five perfectly good screenshots o
 the wrong run. Check the frames after any change to the list or the replay,
 and prefer an addressed jump (`/` then a step number) over waiting a fixed
 number of seconds for playback to arrive somewhere.
+
+**Three of the filler sessions carry an invented credential**, because
+`verbose secrets` has nothing to report otherwise and the triage is the point:
+one to revoke, one expired, one that was never a secret. Every value is
+ASSEMBLED FROM PARTS in `demo-data.py` — a literal of those shapes is a secret
+as far as a scanner is concerned, and GitHub's push protection has already
+rejected a branch of this repository over a fake Slack token in a test
+fixture. They live in the filler sessions, never in the one the tape replays,
+so no step number the tape depends on can move.
 
 **Three files in `PROJECT_FILES` disagree with the transcript on purpose** —
 `router.go`, `store.go` and `store_test.go` — because that disagreement is
