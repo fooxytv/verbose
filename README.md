@@ -101,6 +101,13 @@ session had just applied.
 
 ![editor](docs/img/editor.png)
 
+**What did not last** (`u`) narrows the replay to the steps whose work is no
+longer in the files — three of twenty-one here, one of them written by a
+subagent. The line under each headline names the file and says which it is:
+something replaced the work, or the file itself is gone.
+
+![lost work](docs/img/lost-work.png)
+
 **Every source replays the same way.** This is a Codex thread, which records a
 new file as content rather than as a diff — so the replay types the whole
 document out, and the tree beside it counts the file as new.
@@ -366,8 +373,8 @@ Press `u` to see only the steps whose work is gone. The header says `lost work`,
 and each step carries a line naming what it lost:
 
 ```
-⌫ Not in internal/ui/replay.go any more — something replaced it after this session
-⌫ Not on disk any more — environments/dev.tfvars is gone, so this work is too
+▐ Not in internal/ui/replay.go any more — something replaced it after this session
+▐ Not on disk any more — environments/dev.tfvars is gone, so this work is too
 ```
 
 The unit of comparison is a **block** — one contiguous run of added lines —

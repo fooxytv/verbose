@@ -436,9 +436,11 @@ is gone.
   know about shifts the frame by one on every pause. The test renders the same
   step with and without the line and demands the same height, which is not
   circular the way comparing against the function would be.
-- **`⌫` U+232B, not `✗` or `⊘`.** The timeline already spends those on an
-  error and a denial, and this is neither: the step SUCCEEDED and the work is
-  simply not there now.
+- **The marker is a bar, `▐` U+2590, and that took three tries.** `✗` and `⊘`
+  are the timeline's error and denial and this is neither — the step SUCCEEDED
+  and the work is simply not there now. `⌫` U+232B says "erased" and passed
+  every rule, then drew as an unreadable blob at 13px in the recording; `▌`
+  U+258C is ambiguous-width. Check a glyph in a frame, not in a table.
 - **Pressing `u` with nothing to show restores the list** and says which of the
   two answers it is, for the same reason a search that matches nothing does.
 - Reading files does not belong on a 30ms tick, so a `Survey` is built when the
@@ -562,6 +564,11 @@ agent instead — the recording still produced five perfectly good screenshots o
 the wrong run. Check the frames after any change to the list or the replay,
 and prefer an addressed jump (`/` then a step number) over waiting a fixed
 number of seconds for playback to arrive somewhere.
+
+**Three files in `PROJECT_FILES` disagree with the transcript on purpose** —
+`router.go`, `store.go` and `store_test.go` — because that disagreement is
+what the `u` beat records. Making them consistent would empty the lost-work
+filter and the beat would film an empty screen.
 
 The step a screenshot wants is worth naming in a comment: `docs/img/plan.png`
 is step 5 because that is the first markdown plan, and a step inserted before
