@@ -704,13 +704,25 @@ func (m Model) footer(help string, keys []helpKey) string {
 	// keybindings off the footer — the keys are what the reader acts on.
 	right := mutedStyle.Render(m.footerStatus(usableWidth(m.width) / 3))
 
+	// Masking goes on the LEFT, ahead of the keys, and not in the status.
+	// Both halves give way on a narrow terminal — the status first, and the
+	// keys from the end — so anywhere else it is a safety indicator that
+	// disappears, and believing it is on when it is not is the whole failure
+	// mode. It costs the least useful keybinding instead.
+	var lead string
+	if m.store != nil && m.store.Redacting() {
+		lead = deletedStyle.Render(" redacted ") + " "
+	}
+
 	// Build the keybindings to fit what is left after the status. The sessions
 	// list has a dozen of them, which is wider than an 80- or 100-column
 	// terminal on its own; dropping the last few is better than wrapping onto
 	// a second row, which pushes the footer off the screen.
 	if help == "" {
-		help = renderHelpFit(keys, usableWidth(m.width)-visibleLen(right))
+		help = renderHelpFit(keys,
+			usableWidth(m.width)-visibleLen(right)-visibleLen(lead))
 	}
+	help = lead + help
 
 	// Right-align by padding between the two. visibleLen is required because
 	// both sides carry colour escapes, and a line wider than the terminal

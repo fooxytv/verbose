@@ -448,6 +448,68 @@ is gone.
   here. `applyReplayFilters` is the one place both replay filters are applied,
   because `startReplay` and `rebuildReplay` had each been forgotten once.
 
+## Masking secrets
+
+`pkg/session/redact.go`, `--redact`, applied by `Store.prepare` as each
+session is read.
+
+- **It is a DISPLAY control, not a security control, and the README says so.**
+  Everything in a transcript was in a model's context already, so masking the
+  local copy cannot un-send it. What it stops is the SECOND audience: a screen
+  share, a screenshot in a channel, a `-json` dump pasted into a ticket, a
+  colleague reading over a shoulder. If a secret reached a transcript, the
+  thing that reduces risk is rotating it — and the plaintext copy sitting in
+  `~/.claude/projects` for `cleanupPeriodDays` is the larger ongoing exposure,
+  because it outlives the session and is copied by every backup.
+- **Every pattern came from counting, not from imagining.** The measurement
+  that shaped the file: a generic `sk-[A-Za-z0-9_-]{20,}` matched 255 times
+  across 33.8MB of real transcript and every single hit was the word `task-`.
+  Nought real keys. Anchored with `\b` it matched nothing, which is the honest
+  answer. What is really there: one GitHub token repeated 136 times, 18 copies
+  of the PUBLIC azurite key (`devstoreaccount1`, which Microsoft publishes and
+  which is not a secret at all), a handful of expired JWTs.
+- **A reference to a secret is not a secret.** Fifteen `client_secret` lines
+  here assign a shell variable, and more assign a placeholder or an empty
+  string. Masking those protects nothing and destroys the one useful fact on
+  the line — which variable it came from. `isReference` keeps `$VAR`,
+  `${{ secrets.X }}`, `var.x`, `local.x`, `os.Getenv(...)`, `<placeholder>` and
+  the empties, which is most of a terraform or Actions transcript.
+- **Paths are never redacted.** A redacted path breaks the tree, the relinks
+  and the lost-work survey, and a directory name is not a secret.
+- **Gate every pattern on a plain substring.** Thirteen regexes over 37MB took
+  11 seconds to open; one `ToLower` and thirteen `strings.Contains` checks cut
+  it to 1.6s against 1.1s unredacted, because almost no transcript text
+  contains any of these words.
+- **The indicator goes on the LEFT of the footer, with the keys.** Both halves
+  give way on a narrow terminal — the status first, the keys from the end — so
+  in the status it vanished at exactly the width the sessions list is read at.
+  Believing masking is on when it is not is the whole failure mode, so it
+  costs the least useful keybinding instead.
+- `Store.prepare` is the one place anything happens to a session between
+  parsing and filing it. It exists because `relinks.Apply` was repeated at
+  eight call sites and a ninth thing to do per session is a ninth chance to
+  miss one.
+
+## Finding a step from the shell
+
+`internal/find`, `verbose find <text>`.
+
+- **It exists because the TUI search cannot be piped.** The question arrives at
+  a prompt — "did I ever get that container to export the table" — and the
+  answer is a session, a step number and the line it was on.
+- **A hit says WHY it matched**, with the part of the step named: `command`,
+  `output`, `code`, `file`, `prompt`. A list that only narrows gives no reason
+  for being there.
+- **The headline is suppressed when it IS the match**, because for a one-line
+  shell step the title is the command and printing it twice says nothing. The
+  case that earns the extra line is the multi-line command — one step in five
+  on this machine — where the headline can only show the first line.
+- **Nothing matching is exit 0 and a sentence saying how much was searched.**
+  "No results" over an empty store and over 65 sessions are different answers.
+- **`-limit` stops and says so.** A truncated answer that looks complete is
+  worse than no answer; the test asserts the count as well as the message,
+  because the message alone passed with the stop removed.
+
 ## Searching one replay
 
 `pkg/session/find.go`, `/` with anything that is not a number, `n`/`N` to move

@@ -40,7 +40,36 @@ type Store struct {
 	// relinks rewrite the paths of sessions whose folder was renamed or moved,
 	// applied as each one loads. See relink.go.
 	relinks Relinks
+
+	// redact masks secrets in every session as it is read. Set before Scan
+	// and never changed after, which is what makes it safe to read without
+	// the lock.
+	redact bool
 }
+
+// prepare is everything that happens to a session between parsing it and
+// filing it in the store.
+//
+// It exists because the relink rewrite alone was repeated at eight call sites
+// — one per source, plus load and reload — and a SECOND thing to do per
+// session is a second chance to miss one. It deliberately does not touch
+// s.sessions, so it is safe to call with or without the lock held, which the
+// call sites differ on.
+func (s *Store) prepare(sess *Session) {
+	s.relinks.Apply(sess)
+	if s.redact {
+		RedactSession(sess)
+	}
+}
+
+// SetRedaction masks secrets in every session as it is read. Call it before
+// Scan: sessions already in the store are not revisited, and the flag is read
+// without the lock on the strength of that.
+func (s *Store) SetRedaction(on bool) { s.redact = on }
+
+// Redacting reports whether secrets are being masked, so a view can say so.
+// Believing it is on when it is not is the whole failure mode.
+func (s *Store) Redacting() bool { return s.redact }
 
 // NewStore creates a session store that scans ~/.claude/projects/.
 func NewStore() (*Store, error) {
@@ -309,7 +338,7 @@ func (s *Store) reload(path string) {
 	if err != nil || len(sess.Events) == 0 {
 		return
 	}
-	s.relinks.Apply(sess)
+	s.prepare(sess)
 
 	s.mu.Lock()
 	s.sessions[sess.Info.ID] = sess
@@ -330,7 +359,7 @@ func (s *Store) reload(path string) {
 	// from disk, the subagent still stands on its own.
 	if parentPath != path {
 		if parent, err := ParseSessionFile(parentPath); err == nil && len(parent.Events) > 0 {
-			s.relinks.Apply(parent)
+			s.prepare(parent)
 			s.mu.Lock()
 			s.sessions[parent.Info.ID] = parent
 			s.mu.Unlock()
@@ -353,7 +382,7 @@ func (s *Store) load(path string) {
 	if err != nil || len(sess.Events) == 0 {
 		return
 	}
-	s.relinks.Apply(sess)
+	s.prepare(sess)
 	s.mu.Lock()
 	s.sessions[sess.Info.ID] = sess
 	s.mu.Unlock()
@@ -400,7 +429,7 @@ func (s *Store) scanOpenCodeDBs() {
 		s.mu.Lock()
 		s.ocDBs[dbPath] = info.ModTime()
 		for _, sess := range sessions {
-			s.relinks.Apply(sess)
+			s.prepare(sess)
 			s.sessions[sess.Info.ID] = sess
 		}
 		s.mu.Unlock()
@@ -441,7 +470,7 @@ func (s *Store) loadCodexDir(dir string) bool {
 	defer s.mu.Unlock()
 	s.cxDirs[dir] = mtime
 	for _, sess := range sessions {
-		s.relinks.Apply(sess)
+		s.prepare(sess)
 		s.sessions[sess.Info.ID] = sess
 	}
 	return true
@@ -499,7 +528,7 @@ func (s *Store) loadCopilotDir(dir string) bool {
 	defer s.mu.Unlock()
 	s.cpDirs[dir] = mtime
 	for _, sess := range sessions {
-		s.relinks.Apply(sess)
+		s.prepare(sess)
 		s.sessions[sess.Info.ID] = sess
 	}
 	return true
@@ -561,7 +590,7 @@ func (s *Store) loadPiDir(dir string) bool {
 	defer s.mu.Unlock()
 	s.piDirs[dir] = mtime
 	for _, sess := range sessions {
-		s.relinks.Apply(sess)
+		s.prepare(sess)
 		s.sessions[sess.Info.ID] = sess
 	}
 	return true
@@ -719,7 +748,7 @@ func (s *Store) watchOpenCode() {
 			s.mu.Lock()
 			s.ocDBs[dbPath] = info.ModTime()
 			for _, sess := range sessions {
-				s.relinks.Apply(sess)
+				s.prepare(sess)
 				s.sessions[sess.Info.ID] = sess
 			}
 			s.mu.Unlock()

@@ -45,6 +45,10 @@ back to its own CLI to carry on.
 - `/` in a replay finds a step by what it ran, wrote or printed — a long
   session is too long to step through, and the output is the only place an
   outcome lives
+- `verbose find "docker run"` answers the same question from a prompt, across
+  every session, and says which step and which line
+- `--redact` masks tokens, keys and assigned passwords in every view, for
+  reading a session where someone else can see it
 - A replay opens where you are: on the step the timeline cursor points at, or
   on the search hit you followed into the session
 - Live auto-follow mode — watch sessions update in real time
@@ -53,6 +57,57 @@ back to its own CLI to carry on.
 - Open any file in your own editor (`e`) at the line the session changed — no IDE required
 - Resume any session in a new tmux pane or terminal tab, with the right CLI for its source
 - Delete sessions from the machine, with a confirmation step
+
+## Finding something again
+
+```console
+$ verbose find -project powerbi "docker run"
+4 hits for "docker run" in 2 of 8 sessions
+
+2026-10-20 13:40  claude  powerbi-fabric-workspace-lifecycle  87709cfb-…
+    step 605/1218  Ran NET=$(docker network ls --format '{{.Name}}' | head -1)
+        command: docker run --rm --network "$NET" mcr.microsoft.com/azure-cli:latest \
+```
+
+The question usually arrives at a prompt rather than in an application, and
+the answer is a session, a step number and the line it was on — so `R` and
+`/` take you back to watching it. `-project` narrows, `-limit` bounds, `-json`
+makes it machine-readable, and nothing matching exits 0 with a sentence saying
+how much was searched.
+
+Note the headline on that hit: `Ran NET=$(docker network ls …)`. The `docker
+run` is on the **second line** of the command, so no amount of reading step
+titles would have found it. One step in five on this machine runs a multi-line
+command.
+
+## Reading a session where someone can see it
+
+`verbose --redact` masks what looks like a credential — GitHub, GitLab and
+Slack tokens, Azure account keys and SAS signatures, AWS key ids, JWTs,
+private key blocks, and a password or secret assigned a literal value. The
+footer says `redacted` for as long as it is on, on the left where the
+keybindings are, because both halves of that row give way on a narrow terminal
+and an indicator that disappears is worse than none.
+
+**It is a display control, not a security control.** Everything in a
+transcript has already been through a model, so masking the local copy cannot
+un-send it. What it stops is the *second* audience: a screen share, a
+screenshot in a channel, a `-json` dump pasted into a ticket. **If a secret
+reached a transcript, rotate it** — and remember the plaintext copy lives in
+`~/.claude/projects` until Claude Code's `cleanupPeriodDays` removes it, and
+is copied by every backup in the meantime.
+
+It is deliberately shy. A reference to a secret is not a secret, so
+`client_secret = $ARM_CLIENT_SECRET`, `var.client_secret`,
+`${{ secrets.AZURE_CLIENT_ID }}`, `os.Getenv("API_KEY")` and
+`password = "<your-password>"` are all left alone — on a terraform or Actions
+transcript that is most of them, and masking them would destroy the only
+useful fact on the line while protecting nothing. Every pattern is anchored to
+a word boundary for the same reason: an unanchored `sk-` matched 255 times
+across one real history and every hit was the word `task-`.
+
+Paths are never masked: a redacted path breaks the tree, the relinks and the
+lost-work survey, and a directory name is not a credential.
 
 ## What it looks like
 
