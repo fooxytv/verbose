@@ -8,6 +8,7 @@ one, Copilot's database plus event stream, and pi's file per session.
 Everything here is invented. The repo is public, so the demo must not show real
 session titles, client project names, file paths, code or costs.
 """
+import base64
 import json, os, shutil, sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -64,6 +65,11 @@ def result(tid, payload, text="ok"):
                   "cwd": CWD, "timestamp": ts(), "toolUseResult": payload,
                   "message": {"role": "user", "content": [
                       {"type": "tool_result", "tool_use_id": tid, "content": text}]}})
+
+
+def b64url(raw):
+    """base64url with no padding, which is what a JWT uses."""
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def hunk(os_, ol, ns, nl, ls):
@@ -243,22 +249,58 @@ a_entry({"type": "assistant", "uuid": "s7",
 #
 # A one-row session list says nothing about what the tool is for. These are
 # short and invented, across a couple of projects, with ages spread out.
+# Three of them carry an invented credential, because `verbose secrets` has
+# nothing to report otherwise and the whole point of that command is the
+# TRIAGE: one to revoke, one already dead, one that was never a secret.
+#
+# Every value is assembled from parts rather than written out. A literal of
+# any of these shapes is a secret as far as a scanner is concerned, and
+# GitHub's push protection rejected a branch of this repository over a fake
+# Slack token in a test fixture — which is the system working.
+FAKE_GH = "gh" + "p_" + "D3m0" + "Tok3nF0rTh3R3c0rd1ng0nly00"
+
+# An access token that died three days ago. Built here, with a real payload,
+# because verbose reads the expiry out of the token itself — that is what
+# lets it say "already dead" instead of "a token, good luck".
+_exp = int((NOW - timedelta(days=3)).timestamp())
+_jwt_head = b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+_jwt_body = b64url(json.dumps({
+    "iss": "https://login.microsoftonline.com/demo-tenant/v2.0",
+    "aud": "https://storage.azure.com", "exp": _exp, "sub": "demo",
+}).encode())
+FAKE_JWT = f"{_jwt_head}.{_jwt_body}.ZGVtby1zaWduYXR1cmU"
+
+# The azurite emulator key. This one is genuinely public — Microsoft prints it
+# in its own documentation — and it is here because it looks exactly like a
+# production storage key and verbose has to say that it is not one.
+AZURITE = ("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq"
+           "/K1SZFPTOtr/KBHBeksoGMGw==")
+
 EXTRAS = [
     ("notestore", CWD, "2f8b6c14-9ae3-4d27-b05f-61c7d9a3e8f2", 5,
-     "Add a /healthz endpoint that reports the store connection."),
+     "Add a /healthz endpoint that reports the store connection.", None),
     ("notestore", CWD, "9d41e7b2-6c08-4a15-83fe-2b7a0f9c5d31", 31,
-     "Swap the in-memory store for SQLite behind the same interface."),
+     "Swap the in-memory store for SQLite behind the same interface.",
+     ("az storage blob list --connection-string "
+      "'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;"
+      f"AccountKey={AZURITE};BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1'",
+      "[]\n")),
     ("webhooks", "/tmp/devdemo/webhooks", "4a92c5d7-1f36-4b80-a7e2-8c0d3f6b9a14", 50,
-     "Retry failed webhook deliveries with exponential backoff."),
+     "Retry failed webhook deliveries with exponential backoff.",
+     (f"curl -s -H 'Authorization: Bearer {FAKE_JWT}' https://api.internal/deliveries",
+      '{"pending":3}\n')),
     ("webhooks", "/tmp/devdemo/webhooks", "b8e03f14-7d25-4c69-9a31-5f8c2e7d0b46", 125,
-     "Why is the delivery worker holding connections open after a 504?"),
+     "Why is the delivery worker holding connections open after a 504?", None),
     ("dotfiles", "/tmp/devdemo/dotfiles", "61c7a284-3e9b-42d7-85f0-9a4e1c6b8d53", 1510,
-     "Tidy up the zsh prompt so it stops wrapping on narrow terminals."),
+     "Tidy up the zsh prompt so it stops wrapping on narrow terminals.",
+     (f"git push https://{FAKE_GH}@github.com/demo/dotfiles.git main",
+      "Everything up-to-date\n")),
 ]
 
 extra_sessions = []
-for name, cwd, sid, mins_ago, prompt in EXTRAS:
+for name, cwd, sid, mins_ago, prompt, planted in EXTRAS:
     base = NOW - timedelta(minutes=mins_ago)
+    command, stdout = planted or ("go test ./...", "ok\tall packages\n")
     rows = [
         {"type": "user", "uuid": "x1", "sessionId": sid, "cwd": cwd,
          "timestamp": base.isoformat().replace("+00:00", "Z"),
@@ -273,11 +315,11 @@ for name, cwd, sid, mins_ago, prompt in EXTRAS:
          "message": {"id": "mx3", "role": "assistant", "model": "claude-opus-4-5",
                      "usage": USAGE,
                      "content": [{"type": "tool_use", "id": "xt1", "name": "Bash",
-                                  "input": {"command": "go test ./...",
-                                            "description": "Run the tests"}}]}},
+                                  "input": {"command": command,
+                                            "description": "Run it"}}]}},
         {"type": "user", "uuid": "x4", "sessionId": sid, "cwd": cwd,
          "timestamp": (base + timedelta(seconds=52)).isoformat().replace("+00:00", "Z"),
-         "toolUseResult": {"stdout": "ok\tall packages\n", "stderr": "", "interrupted": False},
+         "toolUseResult": {"stdout": stdout, "stderr": "", "interrupted": False},
          "message": {"role": "user", "content": [
              {"type": "tool_result", "tool_use_id": "xt1", "content": "ok"}]}},
     ]

@@ -218,4 +218,21 @@ Screenshot docs/img/codex.png
 Sleep 2s
 
 Type "q"
-Sleep 1s
+Sleep 1.5s
+
+# Out of the UI and back at a prompt: what those transcripts are still
+# holding. The triage is the point — one token to revoke, one that died
+# three days ago and says so in its own claims, and one that only looks
+# alarming because it is the azurite key Microsoft publishes.
+#
+# The values are invented and assembled from parts in demo-data.py; a
+# literal of any of these shapes is a secret as far as a scanner is
+# concerned, and push protection has already rejected one branch of this
+# repository over a fake.
+Type "clear && verbose secrets -all"
+Sleep 600ms
+Enter
+Sleep 3.5s
+Screenshot docs/img/secrets.png
+Sleep 3s
+

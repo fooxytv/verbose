@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fooxytv/verbose/internal/find"
 	"github.com/fooxytv/verbose/internal/jsonout"
 	"github.com/fooxytv/verbose/internal/relink"
+	"github.com/fooxytv/verbose/internal/secrets"
 	"github.com/fooxytv/verbose/internal/ui"
 	"github.com/fooxytv/verbose/pkg/session"
 )
@@ -32,6 +34,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "find" {
 		os.Exit(runFind(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "secrets" {
+		os.Exit(runSecrets(os.Args[2:]))
 	}
 
 	project := flag.String("project", "", "filter to a specific project name")
@@ -118,6 +123,22 @@ func runFind(args []string) int {
 		fmt.Fprintf(os.Stderr, "Warning: failed to scan sessions: %v\n", err)
 	}
 	return find.Run(args, os.Stdout, os.Stderr, store)
+}
+
+// runSecrets lists the credentials left in the transcripts, so they can be
+// revoked. Masking a view stops a secret reaching a new audience; only
+// rotation does anything about the copy already on disk.
+func runSecrets(args []string) int {
+	store, err := session.NewStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing store: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+	if err := store.Scan(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to scan sessions: %v\n", err)
+	}
+	return secrets.Run(args, os.Stdout, os.Stderr, store, time.Now())
 }
 
 func runRelink(args []string) int {
