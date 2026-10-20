@@ -114,6 +114,15 @@ something replaced the work, or the file itself is gone.
 
 ![lost work](docs/img/lost-work.png)
 
+**Find a step by what it printed** (`/`). The same prompt as "go to step" — a
+number jumps, anything else searches — and `n`/`N` move between the matches.
+Here `want 404` is in two of the session's twenty-one steps: the test that
+asserts it, and the run where it failed. **That failure text exists nowhere but
+the step's output**, which is the half of a session no headline can show: one
+step in five on this machine ran a command too long to fit on one line.
+
+![find](docs/img/find.png)
+
 **Every source replays the same way.** This is a Codex thread, which records a
 new file as content rather than as a diff — so the replay types the whole
 document out, and the tree beside it counts the file as new.

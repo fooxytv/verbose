@@ -162,6 +162,33 @@ Sleep 2.5s
 Type "u"
 Sleep 1.2s
 
+# Find a step by what it PRINTED. "want 404" is in two of this session's
+# twenty-one steps: step 8 wrote the test that asserts it, and step 9 is the
+# run where it failed — and the failure text exists nowhere but that step's
+# output, which is the half of a session no headline can show.
+#
+# `n` moves to the second, which is the frame worth having: the counter reads
+# match 2/2 and the FAIL is on screen under it.
+#
+# The same prompt as "go to step" — a number jumps, anything else searches —
+# so this types a needle into the key the tape already used for step 5.
+Type "/"
+Sleep 500ms
+Type "want 404"
+Sleep 700ms
+Enter
+Sleep 2.5s
+Type "n"
+Sleep 2.5s
+Screenshot docs/img/find.png
+Sleep 2.5s
+
+# Clear the search, so the beats after this are unchanged by it.
+Type "/"
+Sleep 400ms
+Enter
+Sleep 1.2s
+
 # Back out to the list, and into a thread another agent wrote. Codex records a
 # new file as content rather than as a diff, so the replay types the whole
 # OpenAPI document out — step 5, and `/` jumps straight to it rather than
