@@ -403,6 +403,49 @@ Nothing else goes through it: every other `Detail` is a sentence
 - Opening a result carries the query into the timeline and points the cursor
   at the hit, so finding and reading are one move rather than two searches.
 
+## Did the work survive
+
+`pkg/session/survival.go`, `u` in a replay. Compares the blocks a session
+recorded against the files now, and the filter keeps only the steps whose work
+is gone.
+
+- **The unit is a BLOCK, not a hunk.** One contiguous run of added lines is
+  what either survived or did not; two runs separated by a context line are
+  two separate pieces of work, and joining them reports both as missing the
+  moment anything lands between them.
+- **Bias towards saying it survived.** A verbatim match is the only certainty;
+  everything else is a guess from the text, and a filter that cries wolf is
+  one nobody presses twice. A MAJORITY of a block's lines still present counts
+  as surviving in changed form, and lines are matched without indentation —
+  moving code into a loop reindents every line of it and undoes none.
+- **Work the session changed again is not lost.** Without that rule an agent
+  that edits one file eight times reports seven losses: 809 of 4202 blocks on
+  this machine are this case, against 29 genuinely replaced.
+- **Work outside the project is not checked at all.** 140 of 235 files holding
+  "lost" work were scratchpads, `/tmp` and `/dev` — a temp file is MEANT to
+  vanish, and flagging it buried the 95 that were in the project. `underDir`
+  matches whole segments, so `/work/app` does not take in `/work/app-old`.
+- **A project directory that is gone checks nothing.** One rename would
+  otherwise report every step of an old session as lost work, and a rename is
+  what `relink` fixes.
+- **"Nothing was checked" is not "nothing was lost."** `WorkLoss.Checked` is
+  what separates them, and claiming the second when the first is true asserts
+  knowledge there is none of.
+- **The reason line costs a row, and `replayBodyRows` counts it.** The follow
+  and the pause freeze both go through that function, so a row it does not
+  know about shifts the frame by one on every pause. The test renders the same
+  step with and without the line and demands the same height, which is not
+  circular the way comparing against the function would be.
+- **`⌫` U+232B, not `✗` or `⊘`.** The timeline already spends those on an
+  error and a denial, and this is neither: the step SUCCEEDED and the work is
+  simply not there now.
+- **Pressing `u` with nothing to show restores the list** and says which of the
+  two answers it is, for the same reason a search that matches nothing does.
+- Reading files does not belong on a 30ms tick, so a `Survey` is built when the
+  key is pressed and thrown away after — about 140ms on the longest session
+  here. `applyReplayFilters` is the one place both replay filters are applied,
+  because `startReplay` and `rebuildReplay` had each been forgotten once.
+
 ## Source markers
 
 `sourceMarker` in `internal/ui/sessions.go` is the single place the glyph for a

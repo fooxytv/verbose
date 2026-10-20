@@ -39,6 +39,9 @@ back to its own CLI to carry on.
 - Cost reconstructed per model from published rates, rather than one flat rate
 - Replay a session one step at a time, at reading speed, to follow work that
   originally scrolled past in seconds
+- `u` in a replay shows only the work that did **not** last — the steps whose
+  code is no longer in the files, which is otherwise invisible unless you
+  remember it existed
 - Live auto-follow mode — watch sessions update in real time
 - Mouse scroll support
 - Filter by project name
@@ -254,6 +257,7 @@ In the replay view:
 | `/` | Go to a step by number — type `24`, press enter |
 | `a` / `A` | Switch to the next / previous subagent of this run, without leaving the replay |
 | `Tab` | Code only — just the steps that wrote something |
+| `u` | Lost work only — just the steps whose work is no longer in the files |
 | `f` | Follow a running session (on by default) |
 | `0` | Back to the first step |
 | `t` | Jump to this point in the timeline |
@@ -350,6 +354,46 @@ filename, or analysed from the content when a heredoc has no target. The colour
 depth matches the terminal: truecolor where there is truecolor, 256 colours
 otherwise. Highlighted files are cached, so a step costs about a millisecond to
 re-render regardless of size.
+
+### Did the work survive?
+
+A transcript records an intent at a moment. Nothing in it says whether the code
+it put in a file is still there, so an old replay shows every step as equally
+alive: an edit that is still load-bearing reads exactly like one a later
+session quietly replaced.
+
+Press `u` to see only the steps whose work is gone. The header says `lost work`,
+and each step carries a line naming what it lost:
+
+```
+⌫ Not in internal/ui/replay.go any more — something replaced it after this session
+⌫ Not on disk any more — environments/dev.tfvars is gone, so this work is too
+```
+
+The unit of comparison is a **block** — one contiguous run of added lines —
+because that is what either survived or did not. A whole hunk is the wrong
+unit: two runs separated by a context line are two separate pieces of work.
+
+Four rules keep the answer worth trusting, and each of them was measured
+against one machine's history rather than guessed at:
+
+| Rule | Why |
+|---|---|
+| A majority of a block's lines still present counts as **surviving**, in changed form | A later edit to one line inside a ten-line block has not undone the block. Lines are compared without their indentation, so moving code into a loop is not a loss either |
+| Work the session itself changed again afterwards is **not** lost | An agent that edits one file eight times would otherwise report seven losses every time. 809 of 4202 blocks fall here |
+| Work outside the project directory is **not checked** | 140 of 235 files holding "lost" work were scratchpads, `/tmp` and `/dev`. A temp file is *meant* to vanish, and flagging it buries the ones in the project |
+| A project directory that is gone checks **nothing** | A removed or renamed folder is one fact about the session, not a loss in every step of it — and a rename is what [`verbose relink`](#after-renaming-or-moving-a-folder) is for |
+
+What is left is sharp: across 10,385 steps on the machine this was built on,
+94 steps in 12 of 28 sessions had work that is no longer in the files.
+
+Pressing `u` with nothing to show says so and leaves the list alone, rather
+than opening an empty screen. "Nothing was checked" and "nothing was lost" are
+different answers, and it does not give the second when the first is true.
+
+The comparison reads the files, so it happens when you press the key — never
+while drawing a frame. It takes about 140ms on the longest session here, and
+it is a snapshot: nothing watches the files afterwards.
 
 ### Subagents in a replay
 
