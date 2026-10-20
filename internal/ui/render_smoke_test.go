@@ -3,11 +3,118 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fooxytv/verbose/pkg/session"
 )
+
+// maxSmokeSessions bounds how many of a source's real sessions a sweep reads.
+//
+// The corpus only ever grows — one machine's Claude directory for a single
+// project reached 60MB in a day — and a sweep over all of it is a suite that
+// gets slower every week until it stops being run. That is the same reasoning
+// as maxStepsPerSession, one level up: a spread of the corpus catches a broken
+// renderer, and reading all of it only catches it again.
+const maxSmokeSessions = 12
+
+// smokeSample picks a bounded spread of a corpus, keeping the heaviest and the
+// most recent whatever else it takes.
+//
+// Those two are not arbitrary. The heaviest session is where layout arithmetic
+// has the most chances to be wrong, and dropping it would quietly make the
+// sweep cheap by skipping the hard case. The newest is the one most likely to
+// carry a shape the parser has never seen, because it was written by whatever
+// the agents do now rather than by what they did last year.
+//
+// The rest is a stride, so the sample spreads across the corpus instead of
+// taking a prefix: transcripts are discovered in sorted order, so the first N
+// are a handful of projects rather than a cross-section.
+//
+// Deterministic for a given corpus, so a failure can be reproduced. Set
+// VERBOSE_SMOKE_ALL to sweep everything, which is what to do when a rendering
+// bug is suspected and the sample is not showing it.
+func smokeSample[T any](t *testing.T, kind string, items []T, weight func(T) int, when func(T) time.Time) []T {
+	t.Helper()
+	if os.Getenv("VERBOSE_SMOKE_ALL") != "" || len(items) <= maxSmokeSessions {
+		return items
+	}
+
+	keep := map[int]bool{}
+	heaviest, newest := 0, 0
+	for i := range items {
+		if weight(items[i]) > weight(items[heaviest]) {
+			heaviest = i
+		}
+		if when(items[i]).After(when(items[newest])) {
+			newest = i
+		}
+	}
+	keep[heaviest] = true
+	keep[newest] = true
+
+	// Fill the remainder by striding. The two kept above may or may not land
+	// on a stride point, so the cap is checked rather than assumed.
+	stride := max(1, len(items)/max(1, maxSmokeSessions-len(keep)))
+	for i := 0; i < len(items) && len(keep) < maxSmokeSessions; i += stride {
+		keep[i] = true
+	}
+
+	idx := make([]int, 0, len(keep))
+	for i := range keep {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+
+	out := make([]T, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, items[i])
+	}
+	t.Logf("sampled %d of %d %s — the heaviest, the newest and a stride; "+
+		"VERBOSE_SMOKE_ALL=1 sweeps all of them", len(out), len(items), kind)
+	return out
+}
+
+// smokeTranscripts is smokeSample over files, weighed by size and dated by
+// mtime. A file that cannot be stat'd sorts as empty and ancient rather than
+// failing the sweep: it is about to be parsed, and that is where a real
+// problem with it will show.
+func smokeTranscripts(t *testing.T, paths []string) []string {
+	t.Helper()
+	type file struct {
+		path string
+		size int
+		mod  time.Time
+	}
+	files := make([]file, 0, len(paths))
+	for _, p := range paths {
+		f := file{path: p}
+		if fi, err := os.Stat(p); err == nil {
+			f.size, f.mod = int(fi.Size()), fi.ModTime()
+		}
+		files = append(files, f)
+	}
+	picked := smokeSample(t, "transcripts", files,
+		func(f file) int { return f.size },
+		func(f file) time.Time { return f.mod })
+
+	out := make([]string, 0, len(picked))
+	for _, f := range picked {
+		out = append(out, f.path)
+	}
+	return out
+}
+
+// smokeSessions is smokeSample over parsed sessions, weighed by how much there
+// is to render and dated by when the session was last written.
+func smokeSessions(t *testing.T, kind string, sessions []*session.Session) []*session.Session {
+	t.Helper()
+	return smokeSample(t, kind, sessions,
+		func(s *session.Session) int { return len(s.Events) },
+		func(s *session.Session) time.Time { return s.Info.LastUpdate })
+}
 
 // Renders every view against the user's real transcripts to catch panics and
 // obviously broken output. Skips when no transcripts are present.
@@ -21,7 +128,7 @@ func TestRenderRealTranscripts(t *testing.T) {
 		t.Skip("no transcripts available")
 	}
 
-	for _, p := range paths {
+	for _, p := range smokeTranscripts(t, paths) {
 		sess, err := session.ParseSessionFile(p)
 		if err != nil || len(sess.Events) == 0 {
 			continue
@@ -65,6 +172,7 @@ func TestRenderRealOpenCodeSessions(t *testing.T) {
 	if len(sessions) == 0 {
 		t.Skip("no OpenCode sessions available")
 	}
+	sessions = smokeSessions(t, "OpenCode sessions", sessions)
 
 	for _, sess := range sessions {
 		if out := renderSessionOverview(sess, sess.Todos, false, 0, 120, 40); strings.TrimSpace(out) == "" {
@@ -111,6 +219,7 @@ func TestRenderRealCodexSessions(t *testing.T) {
 	if len(sessions) == 0 {
 		t.Skip("no Codex sessions available")
 	}
+	sessions = smokeSessions(t, "Codex sessions", sessions)
 
 	sizes := []struct{ w, h int }{{120, 40}, {80, 24}, {40, 10}}
 
@@ -193,6 +302,7 @@ func TestRenderRealCopilotSessions(t *testing.T) {
 	if len(sessions) == 0 {
 		t.Skip("no Copilot sessions available")
 	}
+	sessions = smokeSessions(t, "Copilot sessions", sessions)
 
 	for _, sess := range sessions {
 		if out := renderSessionOverview(sess, sess.Todos, false, 0, 120, 40); strings.TrimSpace(out) == "" {
@@ -259,6 +369,7 @@ func TestRenderRealPiSessions(t *testing.T) {
 	if len(sessions) == 0 {
 		t.Skip("no pi sessions available")
 	}
+	sessions = smokeSessions(t, "pi sessions", sessions)
 
 	for _, sess := range sessions {
 		if out := renderSessionOverview(sess, sess.Todos, false, 0, 120, 40); strings.TrimSpace(out) == "" {
@@ -322,7 +433,7 @@ func TestRenderRealReplays(t *testing.T) {
 	sizes := []struct{ w, h int }{{120, 40}, {80, 24}, {40, 10}}
 
 	var withSteps int
-	for _, p := range paths {
+	for _, p := range smokeTranscripts(t, paths) {
 		sess, err := session.ParseSessionFile(p)
 		if err != nil || len(sess.Events) == 0 {
 			continue
@@ -382,5 +493,106 @@ func TestRenderReplayEmpty(t *testing.T) {
 	out := renderReplay(replayView{sess: &session.Session{}, steps: nil, idx: 0, scroll: 0, typed: -1, playing: false, delay: replayDefaultDelay, width: 80, height: 24})
 	if !strings.Contains(out, "no steps to replay") {
 		t.Errorf("empty replay did not explain itself: %q", out)
+	}
+}
+
+// The sample is the only thing standing between the sweeps and a suite that
+// grows without bound, so what it guarantees is worth pinning: a cap, the two
+// sessions that are always worth rendering, and a spread rather than a prefix.
+//
+// The indices here are chosen so the stride cannot cover for a missing rule.
+// 61 items and a cap of 12 put the stride points on multiples of 5 or 6, and
+// 57 and 59 are on neither — so dropping "keep the heaviest" or "keep the
+// newest" really does lose them, rather than picking them up by luck.
+func TestSmokeSampleKeepsTheHeaviestTheNewestAndASpread(t *testing.T) {
+	// This is about what the sample does, so an inherited override that turns
+	// sampling off has to go first.
+	t.Setenv("VERBOSE_SMOKE_ALL", "")
+
+	type item struct {
+		id   int
+		size int
+		mod  time.Time
+	}
+	base := time.Now().Add(-1000 * time.Hour)
+	items := make([]item, 61)
+	for i := range items {
+		items[i] = item{id: i, size: 10, mod: base.Add(time.Duration(i) * time.Minute)}
+	}
+	items[57].size = 9999
+	items[59].mod = time.Now()
+
+	weight := func(i item) int { return i.size }
+	when := func(i item) time.Time { return i.mod }
+	got := smokeSample(t, "items", items, weight, when)
+
+	if len(got) > maxSmokeSessions {
+		t.Fatalf("sampled %d items, want at most %d", len(got), maxSmokeSessions)
+	}
+
+	ids := map[int]bool{}
+	for _, g := range got {
+		ids[g.id] = true
+	}
+	if !ids[57] {
+		t.Error("the heaviest session was dropped; the sweep would skip its hardest case")
+	}
+	if !ids[59] {
+		t.Error("the newest session was dropped; the sweep would miss the latest shapes")
+	}
+	// A stride reaches the back of the corpus on its own. Without one, the
+	// only late items are the two kept by name — which is a prefix wearing a
+	// spread's clothes.
+	late := 0
+	for id := range ids {
+		if id > len(items)/2 && id != 57 && id != 59 {
+			late++
+		}
+	}
+	if late == 0 {
+		t.Error("every strided item came from the front — a prefix, not a spread")
+	}
+
+	// Corpus order survives, so a failure reads in the order the corpus does.
+	for i := 1; i < len(got); i++ {
+		if got[i].id <= got[i-1].id {
+			t.Errorf("sample is out of corpus order at %d: %d after %d", i, got[i].id, got[i-1].id)
+		}
+	}
+}
+
+func TestSmokeSampleLeavesASmallCorpusAloneAndObeysTheOverride(t *testing.T) {
+	// Half of this is about the variable being UNSET, so an inherited one has
+	// to go first: running the suite with VERBOSE_SMOKE_ALL=1 — which is the
+	// whole point of having it — otherwise fails this test and nothing else.
+	t.Setenv("VERBOSE_SMOKE_ALL", "")
+
+	weight := func(i int) int { return i }
+	when := func(int) time.Time { return time.Time{} }
+
+	// An empty corpus is the one a sweep hands over on a machine with no
+	// sessions of that source, and asking it for its heaviest member must not
+	// be how anyone finds that out.
+	if got := smokeSample(t, "items", []int{}, weight, when); len(got) != 0 {
+		t.Errorf("an empty corpus sampled to %d items", len(got))
+	}
+
+	small := []int{1, 2, 3}
+	if got := smokeSample(t, "items", small, weight, when); len(got) != len(small) {
+		t.Errorf("sampled %d of a %d-item corpus; nothing should be dropped under the cap",
+			len(got), len(small))
+	}
+
+	big := make([]int, maxSmokeSessions*3)
+	for i := range big {
+		big[i] = i
+	}
+	if got := smokeSample(t, "items", big, weight, when); len(got) > maxSmokeSessions {
+		t.Fatalf("sampled %d, want at most %d", len(got), maxSmokeSessions)
+	}
+	t.Setenv("VERBOSE_SMOKE_ALL", "1")
+	if got := smokeSample(t, "items", big, weight, when); len(got) != len(big) {
+		t.Errorf("VERBOSE_SMOKE_ALL sampled %d of %d; it must sweep everything",
+			len(got), len(big))
 	}
 }
