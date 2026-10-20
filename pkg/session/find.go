@@ -38,15 +38,43 @@ func StepMatches(step ReplayStep, sess *Session, needle string) bool {
 	if needle == "" {
 		return false
 	}
-	for _, text := range stepHaystack(step, sess) {
-		if text == "" {
+	for _, part := range stepHaystack(step, sess) {
+		if part.text == "" {
 			continue
 		}
-		if strings.Contains(strings.ToLower(text), needle) {
+		if strings.Contains(strings.ToLower(part.text), needle) {
 			return true
 		}
 	}
 	return false
+}
+
+// StepMatchLine says WHERE in a step the needle was found: which part of it,
+// and the line it was on.
+//
+// A result that only narrows is a list of steps with no stated reason for
+// being there — the same rule the history search follows. The kinds are the
+// reader's words for the parts of a step: what it ran, what that printed,
+// what it wrote.
+func StepMatchLine(step ReplayStep, sess *Session, needle string) (kind, line string) {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	if needle == "" {
+		return "", ""
+	}
+	for _, part := range stepHaystack(step, sess) {
+		if part.text == "" || !strings.Contains(strings.ToLower(part.text), needle) {
+			continue
+		}
+		if l, ok := matchLine(part.text, needle); ok {
+			return part.kind, l
+		}
+	}
+	return "", ""
+}
+
+// haystackPart is one searchable piece of a step, labelled with what it is.
+type haystackPart struct {
+	kind, text string
 }
 
 // stepHaystack is every piece of text one step can be found by.
@@ -55,29 +83,47 @@ func StepMatches(step ReplayStep, sess *Session, needle string) bool {
 // Both are needed: Detail is a sentence DescribeEvent built, so a word the
 // agent actually typed may appear only in the event, and a command's output
 // never reaches the step at all.
-func stepHaystack(step ReplayStep, sess *Session) []string {
-	out := []string{step.Title, step.Detail, step.Code, step.CodePath, step.FilePath}
+func stepHaystack(step ReplayStep, sess *Session) []haystackPart {
+	// Ordered by how well each one explains a match: the command a reader
+	// half-remembers beats the sentence verbose wrote about it.
+	out := []haystackPart{
+		{"headline", step.Title},
+		{"code", step.Code},
+		{"file", step.CodePath},
+		{"file", step.FilePath},
+	}
 
 	if sess == nil || step.EventIndex < 0 || step.EventIndex >= len(sess.Events) {
-		return out
+		return append(out, haystackPart{"detail", step.Detail})
 	}
 	e := sess.Events[step.EventIndex]
-	out = append(out, e.UserText, e.Text, e.Thinking, e.ToolName, e.ToolOutput,
-		e.UserFeedback, e.FilePath)
 
 	// What was run and what it wrote to: the two inputs a reader is most
 	// likely to search by, and ToolInput is a bag of anything otherwise.
 	if cmd, ok := stringInput(e.ToolInput, "command"); ok {
-		out = append(out, cmd)
+		out = append(out, haystackPart{"command", cmd})
 	}
 	if fp, ok := stringInput(e.ToolInput, "file_path"); ok {
-		out = append(out, fp)
+		out = append(out, haystackPart{"file", fp})
 	}
+	out = append(out,
+		haystackPart{"output", e.ToolOutput},
+		haystackPart{"prompt", e.UserText},
+		haystackPart{"reply", e.Text},
+		haystackPart{"reply", e.Thinking},
+		haystackPart{"feedback", e.UserFeedback},
+		haystackPart{"file", e.FilePath},
+		haystackPart{"detail", step.Detail},
+		haystackPart{"tool", e.ToolName},
+	)
 
 	// A failing shell command records its reason as a bare string rather than
 	// an object, and that string is the only account of the failure there is.
 	if e.Result != nil {
-		out = append(out, e.Result.Raw, e.Result.Stdout, e.Result.Stderr)
+		out = append(out,
+			haystackPart{"error", e.Result.Raw},
+			haystackPart{"output", e.Result.Stdout},
+			haystackPart{"output", e.Result.Stderr})
 	}
 	return out
 }

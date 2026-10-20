@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/fooxytv/verbose/internal/find"
 	"github.com/fooxytv/verbose/internal/jsonout"
 	"github.com/fooxytv/verbose/internal/relink"
 	"github.com/fooxytv/verbose/internal/ui"
@@ -29,6 +30,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "relink" {
 		os.Exit(runRelink(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "find" {
+		os.Exit(runFind(os.Args[2:]))
+	}
 
 	project := flag.String("project", "", "filter to a specific project name")
 	opencode := flag.String("opencode", "", "path to an OpenCode database (defaults to ~/.local/share/opencode/opencode.db)")
@@ -38,6 +42,8 @@ func main() {
 	jsonKind := flag.String("json", "", "print JSON instead of opening the UI: "+strings.Join(jsonout.Kinds, " | "))
 	jsonEvents := flag.Bool("events", false, "include the event timeline in -json session output")
 	jsonLimit := flag.Int("limit", 0, "cap how many sessions -json returns (0 = no cap)")
+	redact := flag.Bool("redact", false,
+		"mask secrets — tokens, keys and assigned passwords — in every view and in -json")
 	flag.Parse()
 
 	store, err := session.NewStore()
@@ -59,6 +65,8 @@ func main() {
 	if *piHome != "" {
 		store.AddPiDir(*piHome)
 	}
+	// Before the scan: sessions already read are not revisited.
+	store.SetRedaction(*redact)
 
 	// Initial scan of all sessions
 	if err := store.Scan(); err != nil {
@@ -96,6 +104,22 @@ func main() {
 
 // runRelink scans the sessions, then hands them to `verbose relink` along with
 // the folder it was run in.
+// runFind answers one question about the whole history on stdout. No watcher
+// and no UI: it is meant to be asked from a prompt and piped into the next
+// thing.
+func runFind(args []string) int {
+	store, err := session.NewStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing store: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+	if err := store.Scan(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to scan sessions: %v\n", err)
+	}
+	return find.Run(args, os.Stdout, os.Stderr, store)
+}
+
 func runRelink(args []string) int {
 	here, err := os.Getwd()
 	if err != nil {
