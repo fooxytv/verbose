@@ -122,6 +122,16 @@ type Model struct {
 	replayMarks map[string]int
 	// replayCodeOnly narrows the step list to the steps that wrote code.
 	replayCodeOnly bool
+
+	// replayLostOnly narrows the step list to the steps whose work is not in
+	// the files any more, and replayLostFates says what became of each, keyed
+	// by event index.
+	//
+	// The fates are computed when the filter is applied, never while drawing:
+	// answering the question means reading the files, which does not belong on
+	// a 30ms tick.
+	replayLostOnly  bool
+	replayLostFates map[int]session.StepFate
 	// replayStepAt is when playback reached the current step, which is what the
 	// tree's highlight fade is measured from.
 	replayStepAt time.Time
@@ -453,6 +463,10 @@ func (m Model) View() string {
 		if m.replayCodeOnly {
 			codeLabel = "all steps"
 		}
+		lostLabel := "lost work"
+		if m.replayLostOnly {
+			lostLabel = "lost work ●"
+		}
 		treeLabel := "tree"
 		if m.treeSplit {
 			treeLabel = "tree ●"
@@ -485,6 +499,10 @@ func (m Model) View() string {
 			helpKey{"+/-", "speed"},
 			helpKey{"/", "go to step"},
 			helpKey{"a", "agents"},
+			// After "go to step", which is pressed far more often: the footer
+			// drops from the end, and at a narrow width this is the key worth
+			// losing first.
+			helpKey{"u", lostLabel},
 		)
 		if !m.treeSplit {
 			helpKeys = append(helpKeys, helpKey{"e", "edit"})

@@ -667,6 +667,22 @@ func TestViewNeverOverflowsTerminal(t *testing.T) {
 			m.replayTyped = 3
 			return m
 		}},
+		{"replay lost work", func(m Model) Model {
+			m.startReplay(sess)
+			m.replayLostOnly = true
+			m.replayLostFates = lostFatesFor(m.replaySteps)
+			m.replayPlaying = true
+			m.replayTyped = 20
+			return m
+		}},
+		{"replay lost work with tree sidebar", func(m Model) Model {
+			m.startReplay(sess)
+			m.loadTreeFor(sess)
+			m.treeSplit = true
+			m.replayLostOnly = true
+			m.replayLostFates = lostFatesFor(m.replaySteps)
+			return m
+		}},
 		{"replay goto prompt", func(m Model) Model {
 			m.startReplay(sess)
 			m.replayGotoTyping = true
@@ -2527,4 +2543,17 @@ func TestPlayAtTheEndWithAStaleMarkStartsAgain(t *testing.T) {
 		t.Errorf("play at the end resumed at step %d, %d characters — want the top",
 			again.replayIndex+1, again.replayTyped)
 	}
+}
+
+// lostFatesFor claims every step lost work in a file with a long name, so the
+// row the reason line costs is drawn at its widest in the frame invariant.
+func lostFatesFor(steps []session.ReplayStep) map[int]session.StepFate {
+	fates := make(map[int]session.StepFate, len(steps))
+	for _, st := range steps {
+		fates[st.EventIndex] = session.StepFate{Replaced: 1, LostFiles: []string{
+			"/somewhere/else/entirely/internal/handlers/retry_with_exponential_backoff.go",
+			"/somewhere/else/entirely/internal/handlers/jitter.go",
+		}}
+	}
+	return fates
 }

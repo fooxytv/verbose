@@ -81,6 +81,11 @@ type replayView struct {
 	// wrote code, which is what the header and the empty state have to say.
 	codeOnly bool
 
+	// lostOnly reports the same for the steps whose work is gone, and lost is
+	// the line saying what this step lost — empty when nothing was.
+	lostOnly bool
+	lost     string
+
 	// run says which member of a parent-and-subagents group is showing, and is
 	// empty when the session has no agents. A status message was not enough:
 	// it clears after a few seconds, and after that there is nothing on screen
@@ -91,12 +96,27 @@ type replayView struct {
 	width, height int
 }
 
+// lostMarker flags the line saying a step's work is no longer in the file.
+//
+// Not ✗ and not ⊘: the timeline already spends those on an error and a denial,
+// and this is neither. The step SUCCEEDED — the work simply is not there any
+// more. U+232B is width 1 and not ambiguous-width, which every glyph on screen
+// has to be.
+const lostMarker = "⌫"
+
 func renderReplay(v replayView) string {
 	sess, steps, idx := v.sess, v.steps, v.idx
 	scroll, typed := v.scroll, v.typed
 	width, height := v.width, v.height
 
 	if len(steps) == 0 {
+		if v.lostOnly {
+			return "\n" + titleStyle.Render("Replay") + "  " +
+				agentStyle.Render("lost work") + "\n\n" +
+				dimStyle.Render("  Every change this session made is still in the files.") + "\n\n" +
+				mutedStyle.Render("  Nothing it wrote has been replaced or removed since.\n"+
+					"  Press u to see every step.")
+		}
 		if v.codeOnly {
 			return "\n" + titleStyle.Render("Replay") + "  " +
 				agentStyle.Render("code only") + "\n\n" +
@@ -127,6 +147,9 @@ func renderReplay(v replayView) string {
 	if v.codeOnly {
 		header += "  " + agentStyle.Render("code only")
 	}
+	if v.lostOnly {
+		header += "  " + agentStyle.Render("lost work")
+	}
 	b.WriteString(clampWidth(header+"  "+
 		dimStyle.Render(truncate(sess.Info.Title, max(10, width-46))), width) + "\n")
 
@@ -140,11 +163,20 @@ func renderReplay(v replayView) string {
 	b.WriteString("\n")
 
 	// The step itself.
-	b.WriteString(clampWidth(replayHeadline(step, sess, width), width) + "\n\n")
+	b.WriteString(clampWidth(replayHeadline(step, sess, width), width) + "\n")
+
+	// What became of the work. It costs a row, so replayBodyRows counts it —
+	// and both the follow and the pause freeze have to arrive at the same
+	// number or the frame shifts by one on every pause.
+	if v.lost != "" {
+		b.WriteString(clampWidth("  "+deletedStyle.Render(lostMarker)+" "+
+			dimStyle.Render(v.lost), width) + "\n")
+	}
+	b.WriteString("\n")
 
 	body := replayBody(step, sess, width, typed)
 
-	visible := replayBodyRows(height, ctx != "", v.waiting)
+	visible := replayBodyRows(height, ctx != "", v.waiting, v.lost != "")
 
 	// While typing, the viewport follows the cursor. Without this the window
 	// stays at the top of the diff and the code arrives off-screen, which is
@@ -193,9 +225,12 @@ func renderReplay(v replayView) string {
 // It is a function rather than arithmetic inside the renderer because pausing
 // has to arrive at the same number: the position a pause freezes is the one
 // the follow computed, and a disagreement of a single row shifts the frame.
-func replayBodyRows(height int, hasContext, waiting bool) int {
+func replayBodyRows(height int, hasContext, waiting, hasLost bool) int {
 	reserved := 9
 	if hasContext {
+		reserved++
+	}
+	if hasLost {
 		reserved++
 	}
 	if waiting {
@@ -680,10 +715,7 @@ func (m *Model) startReplay(sess *session.Session) {
 		m.treeGen++
 	}
 
-	m.replaySteps = session.BuildReplay(sess)
-	if m.replayCodeOnly {
-		m.replaySteps = codeSteps(m.replaySteps, sess)
-	}
+	m.replaySteps = m.applyReplayFilters(session.BuildReplay(sess), sess)
 	m.replayIndex = 0
 	m.replayScroll = 0
 	m.replayPlaying = false
@@ -723,6 +755,40 @@ func (m Model) replayAdvanceCmd() tea.Cmd {
 // one machine's transcripts there were 2592 shell commands against 549 edits,
 // so the handful of steps that actually produced something are otherwise
 // buried in hundreds of greps, builds and git invocations.
+// applyReplayFilters narrows a freshly built step list to what the open
+// filters allow. Both the first build and every rebuild go through here, so a
+// filter cannot be forgotten on one of the two paths.
+//
+// The order matters for the message more than the result: lost work is looked
+// for among the steps still showing, so "3 of 12" counts the 12 on screen.
+func (m *Model) applyReplayFilters(steps []session.ReplayStep, sess *session.Session) []session.ReplayStep {
+	if m.replayCodeOnly {
+		steps = codeSteps(steps, sess)
+	}
+	if m.replayLostOnly {
+		loss := session.LostWork(sess, steps)
+		steps, m.replayLostFates = loss.Steps, loss.Fates
+	} else {
+		m.replayLostFates = nil
+	}
+	return steps
+}
+
+// replayLostLine is the line saying what the step on screen lost, or "" when
+// nothing was — which is every step unless the lost-work filter is open,
+// because nothing has been compared against the files otherwise.
+func (m Model) replayLostLine() string {
+	if len(m.replayLostFates) == 0 || m.selectedSession == nil ||
+		m.replayIndex < 0 || m.replayIndex >= len(m.replaySteps) {
+		return ""
+	}
+	fate, ok := m.replayLostFates[m.replaySteps[m.replayIndex].EventIndex]
+	if !ok {
+		return ""
+	}
+	return fate.Describe(m.selectedSession.Info.CWD)
+}
+
 func codeSteps(steps []session.ReplayStep, sess *session.Session) []session.ReplayStep {
 	var out []session.ReplayStep
 	for _, st := range steps {
@@ -785,10 +851,7 @@ func (m *Model) rebuildReplay(anchor string) {
 	if m.selectedSession == nil {
 		return
 	}
-	steps := session.BuildReplay(m.selectedSession)
-	if m.replayCodeOnly {
-		steps = codeSteps(steps, m.selectedSession)
-	}
+	steps := m.applyReplayFilters(session.BuildReplay(m.selectedSession), m.selectedSession)
 	m.replaySteps = steps
 	if len(steps) == 0 {
 		m.replayIndex = 0
@@ -1084,6 +1147,48 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		}
 		return m, clearStatusAfter()
 
+	case "u":
+		// Show only what did not last. A session's replay says what was done;
+		// this is the only way to see what of it is no longer in the code,
+		// which is otherwise invisible unless you remember it existed.
+		anchor := m.replayStepUUID()
+		if m.replayLostOnly {
+			m.replayLostOnly = false
+			m.replayPlaying = false
+			m.replayTyped = -1
+			m.replayScroll = 0
+			m.replayGen++
+			m.rebuildReplay(anchor)
+			m.statusMsg = "Showing every step"
+			return m, clearStatusAfter()
+		}
+
+		total := len(m.replaySteps)
+		loss := session.LostWork(m.selectedSession, m.replaySteps)
+		if len(loss.Steps) == 0 {
+			// Nothing to show. Entering the filter anyway would blank the
+			// screen, which reads as the replay breaking rather than as an
+			// answer — the same reason a search that matches nothing restores
+			// the list.
+			if loss.Checked == 0 {
+				m.statusMsg = "Nothing to check — this session changed no file inside the project"
+			} else {
+				m.statusMsg = "Every change this session made is still in the files"
+			}
+			return m, clearStatusAfter()
+		}
+
+		m.replayLostOnly = true
+		m.replayPlaying = false
+		m.replayTyped = -1
+		m.replayScroll = 0
+		m.replayGen++
+		m.rebuildReplay(anchor)
+		m.statusMsg = fmt.Sprintf(
+			"Lost work only — %d of %d steps wrote something that is not in the files now",
+			len(loss.Steps), total)
+		return m, clearStatusAfter()
+
 	case "f":
 		m.replayLive = !m.replayLive
 		m.replayGen++
@@ -1201,7 +1306,8 @@ func (m Model) replayFreezeScroll() int {
 	width, height := m.replayPaneSize()
 	body := replayBody(step, m.selectedSession, width, m.replayTyped)
 	visible := replayBodyRows(height,
-		contextLine(m.selectedSession.Info, usableWidth(width)) != "", m.replayWaiting())
+		contextLine(m.selectedSession.Info, usableWidth(width)) != "", m.replayWaiting(),
+		m.replayLostLine() != "")
 	return max(0, len(body)-visible)
 }
 
@@ -1295,6 +1401,8 @@ func (m Model) replayViewState(width, height int) replayView {
 		playing:  m.replayPlaying,
 		waiting:  m.replayWaiting(),
 		codeOnly: m.replayCodeOnly,
+		lostOnly: m.replayLostOnly,
+		lost:     m.replayLostLine(),
 		run:      m.runLabel(),
 		delay:    m.replayDelay,
 		width:    width,
