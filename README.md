@@ -246,7 +246,7 @@ In the session list Claude Code sessions are marked `●`, Codex `✦`, OpenCode
 | `/` | Search **every** session — prompts, replies, files and commands, not just titles |
 | `d` | Delete session (asks to confirm) |
 | `s` | Toggle session summary |
-| `R` | Replay the session step by step |
+| `R` | Replay the session step by step, from wherever the cursor is |
 | `T` | Project tree, marked with what the session changed (works inside a replay too) |
 | `f` | Toggle auto-follow (timeline view) |
 | `r` | Refresh session list |
@@ -303,7 +303,18 @@ typed — a diff is worth following keystroke by keystroke, nine kilobytes of lo
 output is not.
 
 Pausing or scrolling hands control back to you and reveals the whole step at
-once, because stopping to look means you want to read it, not watch it.
+once, because stopping to look means you want to read it, not watch it. Play
+carries on from the character it stopped at, not from the top of the step.
+
+**The replay starts where you are.** `R` opens on the step the timeline cursor
+is pointing at, so a search hit you followed into a session, or a row you
+scrolled to, is the step the replay begins on rather than something to fast
+forward to. Leaving a replay with `Esc` or `t` leaves that cursor on the step
+that was showing, which is what makes pausing to look at something safe:
+coming back with `R` carries on from there instead of starting the session
+again. Opening a session and pressing `R` straight away still starts at step 1
+— the cursor is tracking the end of a possibly-live transcript then, not
+pointing at anything — and `0` is always the way back to the beginning.
 
 ### Reading a plan
 

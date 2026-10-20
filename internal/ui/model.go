@@ -1130,10 +1130,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "R":
-		// Replay the session one step at a time.
+		// Replay the session one step at a time, from wherever the reader is
+		// — the timeline cursor, or a search hit in the list. Asked before
+		// startReplay, which moves the cursor itself.
 		if sess := m.sessionInContext(); sess != nil {
+			at := m.replayEntryEvent(sess)
 			m.startReplay(sess)
-			return m, m.replayAdvanceCmd()
+			m.openReplayAt(at)
+			return m, tea.Batch(m.replayAdvanceCmd(), clearStatusAfter())
 		}
 
 	case "/":

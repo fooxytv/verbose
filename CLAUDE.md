@@ -448,6 +448,32 @@ is gone.
   here. `applyReplayFilters` is the one place both replay filters are applied,
   because `startReplay` and `rebuildReplay` had each been forgotten once.
 
+## Where a replay opens
+
+`replayEntryEvent` and `stepForEvent` in `internal/ui/replay.go`. `R` opens on
+the step the timeline cursor points at, not at step 1.
+
+- **The timeline cursor is the replay's memory of where you were.** There is no
+  second piece of state for it, which is why `esc` out of a replay points the
+  cursor at the step that was showing — `t` already did. Without that, pausing
+  to read something and coming back with `R` started the whole session again,
+  which is what it was reported as: "I press space, and when I press it again
+  it starts again."
+- **`autoFollow` is the exception, and it is what keeps step 1 the default.** A
+  session opened from the list has its cursor on the LAST event, tracking a
+  possibly-live transcript rather than pointing at anything, so honouring it
+  there would open every replay at the end.
+- **Most events are not steps.** `stepForEvent` takes the first step at or
+  after the event, so a cursor on a turn duration or a hook line opens on the
+  work that follows it rather than at the top.
+- **A filter is only dropped when it hides the step.** `pointAtEvent` reports
+  whether it found the event; the cursor indexes the FILTERED list, so a filter
+  hiding the target leaves the cursor somewhere unrelated — and somewhere
+  unrelated is exactly what loses the place.
+- **Say where it started.** A replay that silently opened at step 12 of 54
+  reads as a bug the first time. Space on a FINISHED replay does restart it
+  from step 1, which is deliberate and now says so for the same reason.
+
 ## Source markers
 
 `sourceMarker` in `internal/ui/sessions.go` is the single place the glyph for a

@@ -738,6 +738,77 @@ func (m *Model) startReplay(sess *session.Session) {
 	}
 }
 
+// replayEntryEvent is the event a fresh replay should open on, or -1 to start
+// at the beginning.
+//
+// The timeline cursor is the answer wherever there is one. It is where the
+// reader is: a cursor they moved themselves, a search hit they followed into
+// the session, or the step a replay was left on, which `esc` and `t` both
+// leave it pointing at. A replay that always restarted at step 1 made pausing
+// to look at something cost the whole session.
+//
+// autoFollow is the one case where the cursor is NOT a chosen place — it
+// tracks the end of a live session — so opening a session and pressing R
+// still starts at step 1.
+func (m Model) replayEntryEvent(sess *session.Session) int {
+	switch m.mode {
+	case viewDetail, viewEvent:
+		if sess != m.selectedSession || m.autoFollow {
+			return -1
+		}
+		visible := m.visibleEvents()
+		if m.detailCursor < 0 || m.detailCursor >= len(visible) {
+			return -1
+		}
+		return visible[m.detailCursor]
+
+	case viewSessions:
+		// Out of a search, the hit is the reason the row is on screen at all,
+		// so it is where the replay starts. EventIndex is -1 when only the
+		// title matched, which is the whole session and means step 1.
+		if m.listQuery == "" || m.cursor >= len(m.sessions) {
+			return -1
+		}
+		if mt, ok := m.listMatches[m.sessions[m.cursor].ID]; ok {
+			return mt.EventIndex
+		}
+	}
+	return -1
+}
+
+// stepForEvent is the step that shows an event: its own step where there is
+// one, otherwise the first step AFTER it — the work that follows whatever the
+// reader was looking at. Most events are not steps, and the replay filters
+// hide a good many of the ones that are.
+func stepForEvent(steps []session.ReplayStep, event int) int {
+	if event < 0 {
+		return 0
+	}
+	for i, st := range steps {
+		if st.EventIndex >= event {
+			return i
+		}
+	}
+	return max(0, len(steps)-1)
+}
+
+// openReplayAt points a freshly started replay at an event, and says where it
+// landed. A replay that silently began at step 12 of 54 reads as a bug the
+// first time it happens.
+func (m *Model) openReplayAt(event int) {
+	if event < 0 || len(m.replaySteps) == 0 {
+		return
+	}
+	at := stepForEvent(m.replaySteps, event)
+	if at == 0 {
+		return
+	}
+	m.replayIndex = at
+	m.replayScroll = 0
+	m.statusMsg = fmt.Sprintf("Starting at step %d of %d · 0 goes back to the beginning",
+		at+1, len(m.replaySteps))
+}
+
 // replayAdvanceCmd drives playback: type out whatever is left of this step,
 // then hold it for the step delay before moving on.
 //
@@ -1017,6 +1088,12 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			// it to whatever step the restart lands on — which is step 1, the
 			// very step a mark from the beginning of the session is on.
 			m.replayPausedTyped = 0
+			// And say so. Space on a finished replay looks like a pause key
+			// that threw the reader back to the beginning, which is the one
+			// restart that is meant.
+			if len(m.replaySteps) > 1 {
+				m.statusMsg = "Replay finished — starting again from step 1"
+			}
 		}
 		m.replayTyped = m.replayResumeFrom()
 		m.replayStepAt = time.Now()
@@ -1027,7 +1104,7 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		// sidebar sat still for the rest of the session with no sign why.
 		m.treeFollow = true
 
-		return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen))
+		return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen), clearStatusAfter())
 	}
 
 	switch key {
@@ -1038,6 +1115,11 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		m.replayPlaying = false
 		m.replayTyped = -1
 		m.replayGen++
+		// Leave the timeline pointing at the step that was on screen, the way
+		// `t` does. The cursor IS the replay's memory of where you were —
+		// without this, pausing to read something and coming back with R
+		// started the whole session again.
+		m.jumpTimelineToReplayStep()
 		m.mode = viewDetail
 		if m.selectedSession == nil {
 			m.mode = viewSessions
@@ -1351,25 +1433,35 @@ func (m *Model) jumpTimelineToReplayStep() {
 	}
 	target := m.replaySteps[m.replayIndex].EventIndex
 
-	// The timeline cursor indexes the filtered list, so a filter hiding the
-	// target would land the cursor somewhere unrelated.
-	m.resetTimelineFilter()
+	// The cursor is a position now, so it must stop tracking the end of a
+	// live session — and the next frame would drag it back there otherwise.
 	m.autoFollow = false
+	if m.pointAtEvent(target) {
+		return
+	}
+
+	// The cursor indexes the FILTERED list, so a filter hiding the target
+	// would land it somewhere unrelated — and a cursor somewhere unrelated is
+	// what loses the place when R brings the reader back. Dropping the filter
+	// is the lesser surprise, and only a filter that hides the step pays it.
+	m.resetTimelineFilter()
 	m.pointAtEvent(target)
 }
 
 // pointAtEvent puts the timeline cursor on an event by its index in
 // sess.Events, through whatever filter is applied — detailCursor indexes the
 // FILTERED list, so the position has to be looked up rather than assigned. An
-// event the filter hides leaves the cursor at the top.
-func (m *Model) pointAtEvent(target int) {
+// event the filter hides leaves the cursor at the top, and reports false so
+// the caller can decide whether the filter or the position matters more.
+func (m *Model) pointAtEvent(target int) bool {
 	for i, idx := range m.visibleEvents() {
 		if idx == target {
 			m.detailCursor = i
-			return
+			return true
 		}
 	}
 	m.detailCursor = 0
+	return false
 }
 
 // clampDuration keeps the playback delay inside its bounds. The package-level
