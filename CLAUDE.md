@@ -448,6 +448,45 @@ is gone.
   here. `applyReplayFilters` is the one place both replay filters are applied,
   because `startReplay` and `rebuildReplay` had each been forgotten once.
 
+## Searching one replay
+
+`pkg/session/find.go`, `/` with anything that is not a number, `n`/`N` to move
+between the matches. `search.go` answers which SESSION; this answers where in
+one, which is the question a thousand-step replay raises.
+
+- **The haystack is wider than the step.** A headline is a sentence
+  `DescribeEvent` built, so the words the agent actually typed may only be in
+  the event — and a command's output never reaches the step at all, which is
+  the only place an OUTCOME lives. `stepHaystack` takes both, including
+  `Result.Raw`, the bare string a failed shell command leaves instead of an
+  object.
+- **A step's own title usually carries its command, which makes a test of the
+  command field vacuous.** `replayTitle` quotes a plain shell line in full. The
+  case that proves the input is searched is a heredoc: the title becomes "Wrote
+  gen/ids.go" and the shell that wrote it survives nowhere else.
+- **Digits are a step number, not a needle.** The one thing the prompt cannot
+  do both of, and the number is the likelier intent; the prompt's tail says
+  which of the two the draft currently is.
+- **The hits are indices into the step LIST**, so `applyReplayFilters`
+  recomputes them — a filter that drops half the steps renumbers every match
+  after it, and a stale index jumps to the wrong step.
+- **A search that matches nothing is not adopted.** It leaves the replay where
+  it was and says so, the way the list search restores the list: silently
+  clearing the search that worked loses it.
+- **The badge goes in the HEADER, not on a row.** That row already exists, so
+  a search cannot shift the body by one — the bug this view has had twice.
+- **`n` keeps stepping forward until there is a search.** It was a spare alias
+  for `→`; the search convention is worth more, and the fallback costs nothing.
+- `/` already pauses on the way in, so the pause inside `replayJumpTo` is
+  load-bearing only for `n`/`N`. A test of the prompt path proves nothing
+  about it.
+- **Measured on this machine**: 65 sessions, 13,882 steps, the longest session
+  2246 steps. A search of that one costs 18ms — over a 30ms frame budget, but
+  it runs on the KEYPRESS, like the survival survey, and with no search open
+  `FindSteps` returns before the loop, so a live session reloading pays
+  nothing. A common needle is a blunt instrument: "go test" matches 405 of
+  those 2246 steps, which is what the match count in the header is for.
+
 ## Where a replay opens
 
 `replayEntryEvent` and `stepForEvent` in `internal/ui/replay.go`. `R` opens on

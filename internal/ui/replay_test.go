@@ -444,14 +444,17 @@ func TestReplayGotoClampsAndReportsOutOfRange(t *testing.T) {
 	}
 }
 
-func TestReplayGotoIgnoresNonDigitsAndCancels(t *testing.T) {
+// The prompt takes a needle as well as a step number, so letters are kept
+// now — they are what makes the draft a search. Cancelling still discards the
+// lot and leaves the reader where they were.
+func TestReplayGotoKeepsLettersAndCancels(t *testing.T) {
 	m := replayModelWithSteps(10)
 	m.replayGotoTyping = true
 
 	m = typeGoto(m, "1a2z")
-	if m.replayGotoDraft != "12" {
-		t.Errorf("draft = %q, want %q: letters are not part of a step number",
-			m.replayGotoDraft, "12")
+	if m.replayGotoDraft != "1a2z" {
+		t.Errorf("draft = %q, want %q: a needle is not only digits",
+			m.replayGotoDraft, "1a2z")
 	}
 
 	res, _ := m.handleReplayGotoKey(namedKey(tea.KeyEsc), "esc")
@@ -1406,13 +1409,13 @@ func TestSlashMeansSearchOnTimelineAndGotoInReplay(t *testing.T) {
 		t.Error("/ on the timeline must not open the go-to-step prompt")
 	}
 
-	// In a replay it opens go-to-step.
+	// In a replay it opens the step-or-find prompt.
 	replay := m
 	replay.startReplay(sess)
 	res, _ = replay.handleKey(runeKey("/"))
 	replay = res.(Model)
 	if !replay.replayGotoTyping {
-		t.Error("/ in a replay should open go-to-step")
+		t.Error("/ in a replay should open the step-or-find prompt")
 	}
 	if replay.searchTyping {
 		t.Error("/ in a replay must not open search")
@@ -1424,8 +1427,8 @@ func TestSlashMeansSearchOnTimelineAndGotoInReplay(t *testing.T) {
 		t.Errorf("timeline footer should offer search: %q", foot)
 	}
 	replay.replayGotoTyping = false
-	if foot := stripAnsi(lastRow(replay.View())); !strings.Contains(foot, "/ go to step") {
-		t.Errorf("replay footer should offer go to step: %q", foot)
+	if foot := stripAnsi(lastRow(replay.View())); !strings.Contains(foot, "/ step/find") {
+		t.Errorf("replay footer should offer the step-or-find prompt: %q", foot)
 	}
 }
 
