@@ -534,6 +534,19 @@ directly instead.
 - Smoke tests render every view against the **real transcripts on this
   machine** and skip when there are none. They catch panics and layout breaks
   that synthetic fixtures do not.
+- **They sample the corpus, because it only grows.** `smokeSample` takes at
+  most 12 sessions per source: the heaviest, the newest, and a stride through
+  the rest. The heaviest is where layout arithmetic has the most chances to be
+  wrong and dropping it would make the sweep cheap by skipping the hard case;
+  the newest is the one most likely to carry a shape the parser has never
+  seen. A stride rather than a prefix, because transcripts are discovered in
+  sorted order and the first twelve are a couple of projects rather than a
+  cross-section. `VERBOSE_SMOKE_ALL=1` sweeps everything, which is what to do
+  when a rendering bug is suspected and the sample is not showing it.
+- **A test about that variable must clear it first** (`t.Setenv(…, "")`).
+  Without that, running the suite with `VERBOSE_SMOKE_ALL=1` — the whole point
+  of having it — fails the two tests that check the sampling, and nothing
+  else.
 - Benchmarks guard the per-frame cost: `BenchmarkReplayFrame`,
   `BenchmarkTreeFrame`. A frame must stay far under the 30ms tick.
 - When a test is meant to catch a specific bug, **check it fails without the
