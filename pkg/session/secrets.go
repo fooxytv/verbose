@@ -41,6 +41,10 @@ const (
 	// SecretPossible is a judgement rather than a shape: a password or an
 	// api_key assigned a literal. Worth seeing, not worth alarming over.
 	SecretPossible SecretStatus = "possible"
+	// SecretInert is the shape of a credential with nothing behind it — an
+	// unsigned `alg: none` JWT, which cannot authenticate anything and is
+	// usually there BECAUSE someone was testing that it gets rejected.
+	SecretInert SecretStatus = "inert"
 )
 
 // Sighting is one session a credential appears in.
@@ -60,8 +64,11 @@ type SecretFinding struct {
 	Status      SecretStatus `json:"status"`
 	// Note says what is known beyond the shape: which storage account, when a
 	// token expired, why something is not a secret.
-	Note    string     `json:"note,omitempty"`
-	Rotate  string     `json:"rotate,omitempty"`
+	Note   string `json:"note,omitempty"`
+	Rotate string `json:"rotate,omitempty"`
+	// Prevent is how this kind stops reaching a transcript again. Revoking is
+	// the first half and the shorter one.
+	Prevent string     `json:"prevent,omitempty"`
 	Count   int        `json:"count"`
 	First   time.Time  `json:"first"`
 	Last    time.Time  `json:"last"`
@@ -102,7 +109,8 @@ func ScanSecrets(sessions []*Session, infos map[string]SessionInfo) []SecretFind
 	// or harmless. Within a status, the most recent — a token from this week
 	// is likelier to still be live than one from March.
 	rank := map[SecretStatus]int{
-		SecretRotate: 0, SecretPossible: 1, SecretExpired: 2, SecretPublic: 3,
+		SecretRotate: 0, SecretPossible: 1, SecretExpired: 2,
+		SecretInert: 3, SecretPublic: 4,
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if rank[out[i].Status] != rank[out[j].Status] {
@@ -139,9 +147,11 @@ func scanText(text string, info SessionInfo, byFP map[string]*SecretFinding) {
 			fp := Fingerprint(value)
 			f := byFP[fp]
 			if f == nil {
-				f = &SecretFinding{Kind: r.kind, Fingerprint: fp, Rotate: r.rotate}
+				f = &SecretFinding{Kind: r.kind, Fingerprint: fp,
+					Rotate: r.rotate, Prevent: r.prevent}
 				f.Status, f.Note, f.expires = classify(r, value, lineAround(text, at[0]))
-				if f.Status == SecretPublic || f.Status == SecretExpired {
+				switch f.Status {
+				case SecretPublic, SecretExpired, SecretInert:
 					f.Rotate = ""
 				}
 				byFP[fp] = f
@@ -248,6 +258,14 @@ func classify(r redactor, value, context string) (SecretStatus, string, time.Tim
 		return SecretPublic, note, time.Time{}
 	}
 	if r.kind == "jwt" || strings.HasPrefix(value, "eyJ") {
+		// An unsigned token is not a credential. `alg: none` means nothing
+		// vouches for the claims, so it authenticates nobody — and the ones
+		// on this machine were forged ON PURPOSE, by a command whose own
+		// output reads "forged jwt header (must be 403)". Reporting a test
+		// that something is REJECTED as a leak is the opposite of useful.
+		if alg, ok := jwtAlg(value); ok && strings.EqualFold(alg, "none") {
+			return SecretInert, "unsigned (alg: none) — it authenticates nothing", time.Time{}
+		}
 		if exp, iss, ok := jwtClaims(value); ok {
 			where := ""
 			if iss != "" {
@@ -281,6 +299,10 @@ func classify(r redactor, value, context string) (SecretStatus, string, time.Tim
 var publicValues = map[string]string{
 	// The azurite / Azure Storage emulator devstoreaccount1 key.
 	"0011cc25": "the PUBLIC azurite emulator key — documented by Microsoft, not a secret",
+	// AWS prints these two in its own documentation, and every tutorial and
+	// test fixture in the world copies them.
+	"1a5d44a2": "AWS's own documentation example key id, not a real one",
+	"78314b11": "AWS's own documentation example secret key, not a real one",
 }
 
 var storageAccountRe = regexp.MustCompile(`(?i)AccountName=([A-Za-z0-9]+)`)
@@ -292,6 +314,26 @@ func storageAccount(context string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// jwtAlg reads the algorithm out of a JWT header. The header is base64url of
+// plain JSON, like the payload, so this costs nothing and needs no key.
+func jwtAlg(token string) (string, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", false
+	}
+	var head struct {
+		Alg string `json:"alg"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil || head.Alg == "" {
+		return "", false
+	}
+	return head.Alg, true
 }
 
 // jwtClaims reads the expiry and issuer out of a JWT.

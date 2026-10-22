@@ -77,12 +77,23 @@ type redactor struct {
 	// rotate is where this kind of credential is revoked, when there is one
 	// place. A finding without an action is a worry rather than a task.
 	rotate string
+
+	// prevent is how this kind stops reaching a transcript again. Revoking
+	// is the first half and the shorter one: the credential came through the
+	// agent's hands somehow, and unless that changes the next one will too.
+	prevent string
 }
 
 var redactors = []redactor{
 	// A key block is the one case where the whole thing goes: the body is the
 	// secret and the armour is what makes it findable.
-	{kind: "private key", re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
+	{kind: "private key",
+		rotate: "Generate a new pair and remove the old public half from " +
+			"anything that trusts it",
+		prevent: "A key that has been read into a transcript is a key to " +
+			"replace, not to move. Use an agent or a keychain so the private " +
+			"half is never in a file an agent can read.",
+		re:    regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 		with:  "-----BEGIN PRIVATE KEY----- " + RedactedMark + " -----END PRIVATE KEY-----",
 		gates: []string{"-----begin "}},
 
@@ -90,12 +101,19 @@ var redactors = []redactor{
 	// inside a connection string that is otherwise worth reading — the account
 	// name and the endpoint say which storage it was.
 	{kind: "azure storage key", rotate: "Azure portal → the storage account → Access keys → Rotate",
+		prevent: "Rotating breaks everything still using the key, so move the " +
+			"consumers to Entra ID (az login plus RBAC) or a short-lived SAS " +
+			"first, then rotate.",
 		re: regexp.MustCompile(`(?i)(AccountKey=)[A-Za-z0-9+/=]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"accountkey="}},
 	{kind: "azure shared access key", rotate: "Azure portal → the resource → Shared access policies",
+		prevent: "Issue keys per consumer so one can be revoked without " +
+			"touching the others.",
 		re: regexp.MustCompile(`(?i)(SharedAccessKey=)[A-Za-z0-9+/=]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sharedaccesskey="}},
 	{kind: "azure SAS signature", rotate: "Azure portal → rotate the signing key the SAS was issued from",
+		prevent: "Issue a SAS from a stored access policy with a short expiry: " +
+			"that is what makes one revocable without rotating the account key.",
 		re: regexp.MustCompile(`(?i)([?&]sig=)[A-Za-z0-9%+/=]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sig="}},
 
@@ -103,42 +121,68 @@ var redactors = []redactor{
 	// anchored with \b, which is the whole lesson of the measurement above:
 	// without it "task-" is an OpenAI key 255 times over.
 	{kind: "github token", rotate: "https://github.com/settings/tokens",
+		prevent: "A token in a remote URL is written to .git/config too. Reset the " +
+			"remote to plain https and let `gh auth login` or a credential helper " +
+			"hold it, so it is never in a URL an agent reads.",
 		re: regexp.MustCompile(`\b(gh[pousr]_)[A-Za-z0-9]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_"}},
 	{kind: "github fine-grained token", rotate: "https://github.com/settings/personal-access-tokens",
+		prevent: "Scope the replacement to the one repository and give it an " +
+			"expiry — a fine-grained token with no expiry is a classic one with " +
+			"extra steps.",
 		re: regexp.MustCompile(`\b(github_pat_)[A-Za-z0-9_]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"github_pat_"}},
 	{kind: "anthropic api key", rotate: "https://console.anthropic.com/settings/keys",
+		prevent: "Keep it in the environment or a keychain, and never echo it " +
+			"into a command — the command line is recorded verbatim.",
 		re: regexp.MustCompile(`\b(sk-ant-)[A-Za-z0-9_-]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sk-ant-"}},
 	{kind: "openai api key", rotate: "https://platform.openai.com/api-keys",
+		prevent: "Keep it in the environment or a keychain, and never echo it " +
+			"into a command — the command line is recorded verbatim.",
 		re: regexp.MustCompile(`\b(sk-)[A-Za-z0-9]{20,}`), with: "${1}" + RedactedMark,
 		gates: []string{"sk-"}},
 	{kind: "gitlab token", rotate: "GitLab → Settings → Access tokens",
+		prevent: "Give the replacement an expiry and the narrowest scope that " +
+			"works.",
 		re: regexp.MustCompile(`\b(glpat-)[A-Za-z0-9_-]{16,}`), with: "${1}" + RedactedMark,
 		gates: []string{"glpat-"}},
 	{kind: "slack token", rotate: "https://api.slack.com/apps → the app → OAuth & Permissions",
+		prevent: "Rotate from the app configuration rather than re-installing, " +
+			"so the scopes stay as they were.",
 		re: regexp.MustCompile(`\b(xox[baprs]-)[A-Za-z0-9-]{10,}`), with: "${1}" + RedactedMark,
 		gates: []string{"xox"}},
 	{kind: "aws access key id", rotate: "AWS IAM → the user → Security credentials",
+		prevent: "Prefer IAM Identity Center (aws sso login) or an instance role " +
+			"over a long-lived key pair; the pair is the thing that can leak.",
 		re: regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), with: "AKIA" + RedactedMark,
 		gates: []string{"akia"}},
 
 	// A JWT carries its own claims, so the header alone is enough to say what
 	// was there.
-	{kind: "jwt", re: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]+)?`),
+	{kind: "jwt",
+		prevent: "Usually nothing: an access token is minted short-lived and is " +
+			"dead by the time it is read. If it is long-lived, the fix belongs " +
+			"at the issuer, not here.",
+		re:   regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]+)?`),
 		with: "eyJ" + RedactedMark, gates: []string{"eyj"}},
 
-	{kind: "bearer token", re: regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{20,}`),
+	{kind: "bearer token",
+		prevent: "Identify the issuer first — it is whoever the request was to — " +
+			"then revoke there. An opaque bearer says nothing about itself.",
+		re:   regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{20,}`),
 		with: "${1}" + RedactedMark, gates: []string{"bearer"}},
 
 	// Assignments need a decision rather than a replacement, because most of
 	// what sits to the right of `client_secret =` is not a secret.
-	{kind: "assigned secret", re: assignRe, fn: redactAssignment, gates: []string{
-		"secret", "password", "passwd", "pwd", "api_key", "apikey", "api-key",
-		"access_token", "accesstoken", "access-token", "auth_token",
-		"authtoken", "auth-token",
-	}},
+	{kind: "assigned secret",
+		prevent: "Move the value out of the file into the environment or a " +
+			"secret store, then rotate it — it is in the file's history as well.",
+		re: assignRe, fn: redactAssignment, gates: []string{
+			"secret", "password", "passwd", "pwd", "api_key", "apikey", "api-key",
+			"access_token", "accesstoken", "access-token", "auth_token",
+			"authtoken", "auth-token",
+		}},
 }
 
 // assignRe matches a secret-ish name, a separator, and the value up to

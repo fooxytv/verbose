@@ -351,3 +351,61 @@ func TestEachStorageKeyKeepsItsOwnAccount(t *testing.T) {
 		t.Errorf("accounts = %v, want one each for stprod01 and sttest02", accounts)
 	}
 }
+
+// An unsigned token authenticates nobody. The ones on this machine were
+// forged ON PURPOSE by a command whose own output reads "forged jwt header
+// (must be 403)" — reporting a test that something is REJECTED as a leak is
+// the opposite of useful.
+func TestScanSecretsKnowsAnUnsignedJWTIsNotACredential(t *testing.T) {
+	head := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"someone@example.com"}`))
+	forged := head + "." + body
+
+	findings := scan(secretSession("aaa", "/w/x", time.Now(),
+		"curl -H 'Cf-Access-Jwt-Assertion: "+forged+".' http://127.0.0.1:8097/api"))
+
+	f := findingFor(t, findings, "jwt")
+	if f.Status != SecretInert {
+		t.Errorf("status = %q, want inert — alg:none signs nothing", f.Status)
+	}
+	if f.Rotate != "" {
+		t.Errorf("nothing to revoke on an unsigned token, got %q", f.Rotate)
+	}
+	if !strings.Contains(f.Note, "alg: none") {
+		t.Errorf("note = %q, want it to say why", f.Note)
+	}
+
+	// A SIGNED one is still a credential, or the rule has eaten the feature.
+	signed := jwtWith(time.Now().Add(time.Hour), "https://login.microsoftonline.com/x/")
+	findings = scan(secretSession("bbb", "/w/x", time.Now(), "Bearer "+signed))
+	if f := findingFor(t, findings, "jwt"); f.Status == SecretInert {
+		t.Error("a signed token was called inert")
+	}
+}
+
+// AWS prints these in its own documentation, so every tutorial and test
+// fixture in the world copies them.
+func TestScanSecretsKnowsTheAWSDocumentationExamples(t *testing.T) {
+	findings := scan(secretSession("aaa", "/w/x", time.Now(),
+		"export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"))
+
+	f := findingFor(t, findings, "aws access key id")
+	if f.Status != SecretPublic {
+		t.Errorf("status = %q, want public", f.Status)
+	}
+	if !strings.Contains(f.Note, "documentation") {
+		t.Errorf("note = %q, want it to say what it is", f.Note)
+	}
+}
+
+func TestJWTAlgReadsTheHeader(t *testing.T) {
+	head := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	if alg, ok := jwtAlg(head + ".eyJhIjoxfQ.sig"); !ok || alg != "RS256" {
+		t.Errorf("jwtAlg = %q %v, want RS256", alg, ok)
+	}
+	for _, bad := range []string{"", "notatoken", "only.", "!!!.eyJhIjoxfQ"} {
+		if _, ok := jwtAlg(bad); ok {
+			t.Errorf("jwtAlg(%q) claimed to read an algorithm", bad)
+		}
+	}
+}
