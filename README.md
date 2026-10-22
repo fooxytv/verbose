@@ -34,8 +34,9 @@ back to its own CLI to carry on.
   is no longer in the files
 - **Searches** a whole history, or one replay, by what was run, written or
   printed — from the UI or from a prompt with `verbose find`
-- Lists the **credentials left in your transcripts** (`verbose secrets`) so you
-  know what to revoke, and masks them on screen with `--redact`
+- Tables the **credentials left in your transcripts** (`verbose secrets`) with
+  what to revoke, what is already dead, and what stops each kind getting there
+  again — and masks them on screen with `--redact`
 - Reconstructs **cost** per model from published rates, per session and per
   project
 - Hands any session back to its own CLI to carry on (`c`)
@@ -127,11 +128,13 @@ step in five on this machine ran a command too long to fit on one line.
 
 ![find](docs/img/find.png)
 
-**And from a prompt.** `verbose secrets` lists the credentials your
+**And from a prompt.** `verbose secrets` tables the credentials your
 transcripts are still holding, by fingerprint — never the value — so the
 output is safe to paste into a ticket. The triage is the point: one token to
 revoke, one that died three days ago and says so in its own claims, and one
 that only looks alarming because it is the emulator key Microsoft publishes.
+Each kind carries both halves of the fix — where to revoke it, and what stops
+it reaching a transcript again.
 
 ![secrets](docs/img/secrets.png)
 

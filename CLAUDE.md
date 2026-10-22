@@ -524,6 +524,28 @@ session is read.
 - **Judgement calls are hidden unless asked for.** An assigned literal is
   `possible`, not `rotate`, and `-all` is what shows it — one alarm that is
   wrong costs the whole report its authority.
+- **A TABLE, because the question is a comparison** — which matters most,
+  which is oldest, which is in work you remember. The per-session detail the
+  rows summarise is behind `-details`.
+- **Every finding carries both halves of the fix.** `redactor.rotate` ends
+  this credential; `redactor.prevent` is why it will not be the last one. They
+  live on the same table as the pattern, so a new shape cannot be added
+  without someone deciding what to tell the reader about it. The advice prints
+  per KIND, so four GitHub tokens get it once.
+- **`alg: none` is not a credential.** It signs nothing, and the two on this
+  machine were forged on purpose by a command whose own output reads "forged
+  jwt header (must be 403)". Reporting a test that something is REJECTED as a
+  leak is the opposite of useful.
+- **Published examples are held by fingerprint**: the azurite key, and AWS's
+  `AKIAIOSFODNN7EXAMPLE`. Every tutorial copies those.
+- **The report must SHRINK as it is dealt with.** `-ignore <fingerprint>`
+  writes to `~/.config/verbose/secrets-ignored.json` — fingerprints only, so
+  that file holds no secret either — and the hidden count is always printed,
+  because a report that quietly drops rows cannot be trusted to be complete.
+  Re-acknowledging keeps the FIRST date: when it was dealt with is the fact.
+- **Tests here must isolate `HOME`.** Without it they read the ignore list on
+  the machine running them, and a fingerprint acknowledged for real silently
+  hides the finding a test asserts on. That is how it was found.
 
 ## Finding a step from the shell
 
