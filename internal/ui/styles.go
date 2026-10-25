@@ -131,6 +131,16 @@ var (
 			Foreground(colorGreen).
 			PaddingLeft(1)
 
+	// A status that says a key did nothing, and why.
+	statusWarnStyle = lipgloss.NewStyle().
+			Foreground(colorYellow).
+			PaddingLeft(1)
+
+	// A status that says something failed.
+	statusErrorStyle = lipgloss.NewStyle().
+				Foreground(colorRed).
+				PaddingLeft(1)
+
 	// Active filter / search indicator on the timeline
 	searchStyle = lipgloss.NewStyle().
 			Foreground(colorPurple)
@@ -182,3 +192,17 @@ var (
 	readStyle = lipgloss.NewStyle().
 			Foreground(colorText)
 )
+
+// statusStyle colours the current status message by its level.
+func (m Model) statusStyle() lipgloss.Style {
+	if m.statusMsg != m.statusAlert {
+		return statusStyle
+	}
+	switch m.alertLevel {
+	case statusWarn:
+		return statusWarnStyle
+	case statusError:
+		return statusErrorStyle
+	}
+	return statusStyle
+}

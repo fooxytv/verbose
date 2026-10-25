@@ -742,7 +742,7 @@ func (m *Model) startReplay(sess *session.Session) {
 	m.mode = viewReplay
 
 	if len(m.replaySteps) == 0 {
-		m.statusMsg = "Nothing to replay in this session"
+		m.warn("Nothing to replay in this session")
 	}
 }
 
@@ -1036,8 +1036,8 @@ func (m Model) handleReplayGotoKey(msg tea.KeyMsg, key string) (tea.Model, tea.C
 		m.replayTyped = -1
 		m.replayGen++
 		if n < 1 || n > len(m.replaySteps) {
-			m.statusMsg = fmt.Sprintf("Only %d steps — showing step %d",
-				len(m.replaySteps), m.replayIndex+1)
+			m.warn(fmt.Sprintf("Only %d steps — showing step %d",
+				len(m.replaySteps), m.replayIndex+1))
 			return m, clearStatusAfter()
 		}
 		return m, nil
@@ -1425,8 +1425,8 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			m.treeGen++
 			if side := sidebarWidth(m.width); side == 0 {
 				m.treeSplit = false
-				m.statusMsg = fmt.Sprintf("Need %d columns for a split — this terminal has %d",
-					splitMinWidth, m.width)
+				m.warn(fmt.Sprintf("Need %d columns for a split — this terminal has %d",
+					splitMinWidth, m.width))
 				return m, clearStatusAfter()
 			}
 			return m, tea.Batch(m.replayAdvanceCmd(), treeTickCmd(m.treeGen))
@@ -1644,7 +1644,7 @@ func (m *Model) switchRun(delta int) {
 	}
 	group := session.RunGroup(m.store.GetSessions(), m.selectedSession.Info.ID)
 	if len(group) < 2 {
-		m.statusMsg = "No subagents in this session"
+		m.warn("No subagents in this session")
 		return
 	}
 
@@ -1659,7 +1659,7 @@ func (m *Model) switchRun(delta int) {
 
 	sess := m.store.GetSession(next.ID)
 	if sess == nil {
-		m.statusMsg = "Could not open " + next.ID
+		m.fail("Could not open " + next.ID)
 		return
 	}
 
