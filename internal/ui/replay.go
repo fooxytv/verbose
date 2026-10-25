@@ -1094,7 +1094,7 @@ func (m Model) startReplayFind(query string) (tea.Model, tea.Cmd) {
 
 	hits := session.FindSteps(m.selectedSession, m.replaySteps, query)
 	if len(hits) == 0 {
-		m.statusMsg = fmt.Sprintf("No step in this replay matches %q", query)
+		m.warn(fmt.Sprintf("No step in this replay matches %q", query))
 		return m, clearStatusAfter()
 	}
 
@@ -1378,7 +1378,7 @@ func (m Model) handleReplayKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			// answer — the same reason a search that matches nothing restores
 			// the list.
 			if loss.Checked == 0 {
-				m.statusMsg = "Nothing to check — this session changed no file inside the project"
+				m.warn("Nothing to check — this session changed no file inside the project")
 			} else {
 				m.statusMsg = "Every change this session made is still in the files"
 			}

@@ -1046,7 +1046,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Codex has no delete to delegate to, so say so here rather than
 			// asking a question whose yes cannot be honoured.
 			if target.Source == "codex" || target.Source == "copilot" {
-				m.statusMsg = "Codex and Copilot sessions cannot be deleted from verbose"
+				m.warn("Codex and Copilot sessions cannot be deleted from verbose")
 				return m, clearStatusAfter()
 			}
 			m.confirmDelete = target
@@ -1576,7 +1576,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			m.cursor = 0
 			m.refreshSessions()
 			if m.listQuery != "" && len(m.sessions) == 0 {
-				m.statusMsg = fmt.Sprintf("Nothing matches %q", m.listQuery)
+				m.warn(fmt.Sprintf("Nothing matches %q", m.listQuery))
 				m.listQuery = ""
 				m.refreshSessions()
 				return m, clearStatusAfter()
