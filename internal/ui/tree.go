@@ -378,7 +378,7 @@ func (m *Model) openTree(sess *session.Session) {
 		m.replayStepAt = time.Now()
 	}
 	if m.treeRoot == nil {
-		m.statusMsg = "Could not read this session's project directory"
+		m.fail("Could not read this session's project directory")
 	}
 }
 
@@ -740,7 +740,7 @@ func (m *Model) treeFollowCursor(total int) {
 func (m Model) openFileInReplay(path string) (tea.Model, tea.Cmd) {
 	a := m.treeActivity[path]
 	if a == nil || len(a.Touches) == 0 {
-		m.statusMsg = "This session did not touch " + session.ShortPath(path, m.selectedSession.Info.CWD)
+		m.warn("This session did not touch " + session.ShortPath(path, m.selectedSession.Info.CWD))
 		return m, clearStatusAfter()
 	}
 
@@ -765,7 +765,7 @@ func (m Model) openFileInReplay(path string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	m.statusMsg = "No replay step for that change"
+	m.warn("No replay step for that change")
 	return m, clearStatusAfter()
 }
 
@@ -976,7 +976,7 @@ func (m *Model) openDiff() {
 
 	node := rows[m.treeCursor].node
 	if node.IsDir {
-		m.statusMsg = "Select a file to diff — " + node.Name + " is a directory"
+		m.warn("Select a file to diff — " + node.Name + " is a directory")
 		return
 	}
 
@@ -989,8 +989,8 @@ func (m *Model) openDiff() {
 	if len(m.diffChanges()) == 0 {
 		// Still open it: the panel explains that a file can be touched without
 		// leaving a diff, which is more use than nothing happening.
-		m.statusMsg = "No recorded diff for " +
-			session.ShortPath(node.Path, m.selectedSession.Info.CWD)
+		m.warn("No recorded diff for " +
+			session.ShortPath(node.Path, m.selectedSession.Info.CWD))
 	}
 }
 

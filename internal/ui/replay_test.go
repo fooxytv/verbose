@@ -2090,6 +2090,31 @@ func TestContinueExplainsARenamedFolder(t *testing.T) {
 	if cmd == nil {
 		t.Error("c on a missing folder should still schedule the status to clear")
 	}
+	if got := res.(Model).statusStyle().GetForeground(); got != colorRed {
+		t.Errorf("a missing folder is a failure: status colour = %v, want red", got)
+	}
+}
+
+// Green reads as "all is well", so a failure must not be drawn in it — and a
+// plain message after a warning must go back to green, not stay yellow.
+func TestStatusColourFollowsItsLevel(t *testing.T) {
+	var m Model
+	m.statusMsg = "Copied last prompt to clipboard"
+	if got := m.statusStyle().GetForeground(); got != colorGreen {
+		t.Errorf("plain status = %v, want green", got)
+	}
+	m.warn("No file to edit here")
+	if got := m.statusStyle().GetForeground(); got != colorYellow {
+		t.Errorf("warning = %v, want yellow", got)
+	}
+	m.fail("The CLI did not run")
+	if got := m.statusStyle().GetForeground(); got != colorRed {
+		t.Errorf("failure = %v, want red", got)
+	}
+	m.statusMsg = "Showing every step"
+	if got := m.statusStyle().GetForeground(); got != colorGreen {
+		t.Errorf("plain status after a failure = %v, want green again", got)
+	}
 }
 
 // The panel is a text box: it takes every key, and must not leak them to the

@@ -149,7 +149,7 @@ func editModeFor(key string) editMode {
 // `E` asks for it anyway.
 func (m *Model) editFile(path string, mode editMode) tea.Cmd {
 	if path == "" {
-		m.statusMsg = "No file to edit here"
+		m.warn("No file to edit here")
 		return clearStatusAfter()
 	}
 
@@ -165,17 +165,17 @@ func (m *Model) editFile(path string, mode editMode) tea.Cmd {
 	// than never there.
 	info, err := os.Stat(path)
 	if err != nil {
-		m.statusMsg = "No longer on disk: " + short
+		m.warn("No longer on disk: " + short)
 		return clearStatusAfter()
 	}
 	if info.IsDir() {
-		m.statusMsg = "Select a file to edit — " + short + " is a directory"
+		m.warn("Select a file to edit — " + short + " is a directory")
 		return clearStatusAfter()
 	}
 
 	ed, ok := resolveEditor()
 	if !ok {
-		m.statusMsg = "No editor found — set $EDITOR"
+		m.warn("No editor found — set $EDITOR")
 		return clearStatusAfter()
 	}
 
@@ -199,7 +199,7 @@ func (m *Model) editFile(path string, mode editMode) tea.Cmd {
 func (m *Model) editTreeSelection(mode editMode) tea.Cmd {
 	rows := m.treeRows()
 	if len(rows) == 0 {
-		m.statusMsg = "No file to edit here"
+		m.warn("No file to edit here")
 		return clearStatusAfter()
 	}
 
@@ -218,6 +218,6 @@ func (m *Model) editCurrentStep(mode editMode) tea.Cmd {
 			return m.editFile(path, mode)
 		}
 	}
-	m.statusMsg = "This step does not touch a file"
+	m.warn("This step does not touch a file")
 	return clearStatusAfter()
 }

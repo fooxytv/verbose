@@ -157,6 +157,13 @@ type Model struct {
 	// Transient status message (e.g. "Copied to clipboard")
 	statusMsg string
 
+	// statusAlert is the last message set through warn or fail, and alertLevel
+	// says which. It colours statusMsg only while the two are the same text, so
+	// a plain message set afterwards is green again without every setter
+	// having to know that levels exist.
+	statusAlert string
+	alertLevel  statusLevel
+
 	// Session awaiting delete confirmation; every key is captured while set
 	confirmDelete *session.SessionInfo
 
@@ -254,14 +261,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A CLI that could not be started at all lands here too, and must say so
 		// rather than return to the screen as if nothing had been pressed.
 		if msg.err != nil {
-			m.statusMsg = "The CLI did not run: " + msg.err.Error()
+			m.fail("The CLI did not run: " + msg.err.Error())
 			return m, clearStatusAfter()
 		}
 		return m, nil
 
 	case yankDoneMsg:
 		if msg.err != nil {
-			m.statusMsg = "Failed to copy: " + msg.err.Error()
+			m.fail("Failed to copy: " + msg.err.Error())
 		} else {
 			m.statusMsg = "Copied last prompt to clipboard"
 		}
@@ -269,7 +276,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionDeletedMsg:
 		m.deleting = false
-		m.statusMsg = deleteResultMessage(msg)
+		if msg.err != nil {
+			m.fail(deleteResultMessage(msg))
+		} else {
+			m.statusMsg = deleteResultMessage(msg)
+		}
 		// The open session may be the one that just went away.
 		if msg.err == nil && m.selectedSession != nil && m.selectedSession.Info.ID == msg.id {
 			m.selectedSession = nil
@@ -597,7 +608,7 @@ func (m Model) View() string {
 		}
 		help = ""
 	case m.statusMsg != "":
-		help = statusStyle.Render(m.statusMsg)
+		help = m.statusStyle().Render(m.statusMsg)
 	}
 
 	// Pin the footer to the last row of the terminal. Views whose content is
@@ -1035,7 +1046,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Codex has no delete to delegate to, so say so here rather than
 			// asking a question whose yes cannot be honoured.
 			if target.Source == "codex" || target.Source == "copilot" {
-				m.statusMsg = "Codex and Copilot sessions cannot be deleted from verbose"
+				m.warn("Codex and Copilot sessions cannot be deleted from verbose")
 				return m, clearStatusAfter()
 			}
 			m.confirmDelete = target
@@ -1063,7 +1074,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if info != nil {
 			if why := missingCWD(info.CWD); why != "" {
-				m.statusMsg = why
+				m.fail(why)
 				return m, clearStatusAfter()
 			}
 			return m, resumeSessionCmd(info.ID, info.CWD)
@@ -1091,7 +1102,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if info != nil {
 			if why := missingCWD(info.CWD); why != "" {
-				m.statusMsg = why
+				m.fail(why)
 				return m, clearStatusAfter()
 			}
 			return m, newSessionCmd(info.Source, info.CWD)
@@ -1144,7 +1155,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if info != nil && sess != nil {
 			if why := missingCWD(info.CWD); why != "" {
-				m.statusMsg = why
+				m.fail(why)
 				return m, clearStatusAfter()
 			}
 			if prompt := lastUserPrompt(sess); prompt != "" {
@@ -1565,7 +1576,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			m.cursor = 0
 			m.refreshSessions()
 			if m.listQuery != "" && len(m.sessions) == 0 {
-				m.statusMsg = fmt.Sprintf("Nothing matches %q", m.listQuery)
+				m.warn(fmt.Sprintf("Nothing matches %q", m.listQuery))
 				m.listQuery = ""
 				m.refreshSessions()
 				return m, clearStatusAfter()
@@ -1605,4 +1616,23 @@ func (m Model) handleSearchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 // space binding dead there. Both stringify to " ".
 func isSpace(msg tea.KeyMsg) bool {
 	return msg.String() == " "
+}
+
+// statusLevel is how a status message is coloured: green unless it is one of
+// these. Green reads as "all is well", which a failure is not.
+type statusLevel int
+
+const (
+	statusWarn  statusLevel = iota + 1 // a key did nothing, and here is why
+	statusError                        // something failed
+)
+
+// warn shows a status message in yellow.
+func (m *Model) warn(text string) {
+	m.statusMsg, m.statusAlert, m.alertLevel = text, text, statusWarn
+}
+
+// fail shows a status message in red.
+func (m *Model) fail(text string) {
+	m.statusMsg, m.statusAlert, m.alertLevel = text, text, statusError
 }
