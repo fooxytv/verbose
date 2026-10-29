@@ -51,3 +51,37 @@ func TestWatchFindsSubagentStartedAfterScan(t *testing.T) {
 	}
 	t.Fatal("subagent started after the scan was never loaded")
 }
+
+// A session in a folder nothing has run in before creates its project
+// directory, which did not exist at the scan either.
+func TestWatchFindsProjectStartedAfterScan(t *testing.T) {
+	base := t.TempDir()
+
+	s, err := NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// What Scan does for an empty projects directory.
+	s.baseDir = base
+	if err := s.watcher.Add(base); err != nil {
+		t.Fatal(err)
+	}
+	s.Watch()
+
+	project := filepath.Join(base, "C--work-fresh-worktree")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(project, "fresh.jsonl"),
+		`{"type":"user","uuid":"u1","sessionId":"fresh","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"start"}}`+"\n")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.GetSession("fresh") != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("session in a project created after the scan was never loaded")
+}
