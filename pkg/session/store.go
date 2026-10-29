@@ -128,6 +128,9 @@ func (s *Store) Scan() error {
 		return err
 	}
 
+	// And the projects directory itself, for projects created from now on
+	_ = s.watcher.Add(s.baseDir)
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -340,6 +343,10 @@ func (s *Store) watchNewDir(path string) bool {
 	if err != nil || !info.IsDir() {
 		return false
 	}
+	if filepath.Dir(path) == s.baseDir {
+		s.watchNewProject(path)
+		return true
+	}
 	if filepath.Base(path) != "subagents" {
 		// Otherwise only a session's directory, one below a project's, is of
 		// interest: watch it for subagents/ appearing, and take subagents/ now
@@ -365,6 +372,31 @@ func (s *Store) watchNewDir(path string) bool {
 		}
 	}
 	return true
+}
+
+// watchNewProject picks up a project's directory created after Scan. One
+// appears the first time a session runs in a folder nothing has run in before
+// — a fresh worktree, say — and Scan only watched the projects already there,
+// so that session stayed invisible until verbose was restarted.
+//
+// As in watchNewDir, the watch goes on before the directory is read, so the
+// first transcript cannot slip in between unseen.
+func (s *Store) watchNewProject(dir string) {
+	_ = s.watcher.Add(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, f := range entries {
+		path := filepath.Join(dir, f.Name())
+		if f.IsDir() {
+			s.watchNewDir(path)
+			continue
+		}
+		if strings.HasSuffix(f.Name(), ".jsonl") {
+			s.reload(path)
+		}
+	}
 }
 
 // reload re-parses one transcript after it changed, and restores the subagent
