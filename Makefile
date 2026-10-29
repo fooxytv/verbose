@@ -1,4 +1,4 @@
-VERSION ?= 0.35.1
+VERSION ?= 0.35.2
 BINARY  := verbose
 DEST    := $(HOME)/go/bin/$(BINARY)
 LDFLAGS := -X main.version=$(VERSION)

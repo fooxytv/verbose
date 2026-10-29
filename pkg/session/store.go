@@ -325,6 +325,48 @@ func (s *Store) scanSubagents(sessionDir string) {
 	}
 }
 
+// watchNewDir picks up a session's directory, or the subagents/ inside it,
+// created after Scan. Neither exists until the session's first subagent
+// starts, and Scan only watches what was already there — so a run launched
+// while verbose was open stayed invisible until it was restarted. A parent
+// waiting on a foreground agent writes nothing meanwhile, so reloading the
+// parent would not find it either; the directory appearing is the only sign.
+//
+// The watch is added before the directory is read, so a transcript created in
+// between is seen twice rather than missed. Reports whether path was a
+// directory, so the caller can stop there.
+func (s *Store) watchNewDir(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if filepath.Base(path) != "subagents" {
+		// Otherwise only a session's directory, one below a project's, is of
+		// interest: watch it for subagents/ appearing, and take subagents/ now
+		// if it was made in the same breath.
+		if filepath.Dir(filepath.Dir(path)) != s.baseDir {
+			return true
+		}
+		_ = s.watcher.Add(path)
+		path = filepath.Join(path, "subagents")
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			return true
+		}
+	}
+
+	_ = s.watcher.Add(path)
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return true
+	}
+	for _, f := range entries {
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".jsonl") {
+			s.reload(filepath.Join(path, f.Name()))
+		}
+	}
+	return true
+}
+
 // reload re-parses one transcript after it changed, and restores the subagent
 // links that a fresh parse drops.
 //
@@ -656,6 +698,9 @@ func (s *Store) Watch() <-chan struct{} {
 			case event, ok := <-s.watcher.Events:
 				if !ok {
 					return
+				}
+				if event.Op&fsnotify.Create != 0 && s.watchNewDir(event.Name) {
+					continue
 				}
 				if !strings.HasSuffix(event.Name, ".jsonl") {
 					continue
