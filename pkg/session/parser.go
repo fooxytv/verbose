@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"time"
 )
+
+// maxLineBytes is the longest transcript line read. A longer one stops the
+// read there, as bufio.Scanner does.
+const maxLineBytes = 10 * 1024 * 1024
 
 // ParseSessionFile reads a JSONL transcript and returns a fully parsed Session.
 func ParseSessionFile(path string) (*Session, error) {
@@ -19,212 +24,309 @@ func ParseSessionFile(path string) (*Session, error) {
 	}
 	defer f.Close()
 
+	p := newTranscriptParser(path)
+	p.read(f)
+	// Nothing else holds p, so the session can take its events as they are.
+	return p.session(false), nil
+}
+
+// transcriptParser is a transcript read so far: everything gathered line by
+// line, before the whole-session passes (pairing calls with results, totals,
+// the title) are made.
+//
+// It exists so that a transcript being appended to can be read from where it
+// was left, rather than from the start. A long session's file runs to hundreds
+// of megabytes, and re-parsing all of it on every write kept a core busy for as
+// long as the session was live. ParseSessionFile is the same parser fed the
+// whole file at once, so the two cannot disagree.
+type transcriptParser struct {
+	// The fields gathered line by line. Totals that need the whole session
+	// (tokens, churn lines, cost, title, file lists) are left zero and filled
+	// in by session.
+	info SessionInfo
+	// Events as parsed, before tool results are folded into their calls.
+	events []Event
+
+	// Claude Code writes one JSONL line per content block, with every block of
+	// a single assistant message sharing that message's ID. Usage is repeated
+	// verbatim on each of those lines, so tokens are accumulated once per
+	// message ID while events are emitted from every line.
+	usageByMessage map[string]rawUsage
+
+	filesRead    map[string]bool
+	filesWritten map[string]bool
+	filesCreated map[string]bool
+	launches     map[string]string
+	churn        map[string]*FileChurn // edit counts only; lines come from results
+	skills       map[string]bool
+
+	// offset is how many bytes of the file have been consumed: always the end
+	// of a complete line, so the next read starts at the start of one.
+	offset int64
+}
+
+func newTranscriptParser(path string) *transcriptParser {
 	basename := filepath.Base(path)
-	sessionID := strings.TrimSuffix(basename, ".jsonl")
-	isAgent := strings.HasPrefix(basename, "agent-")
-
 	projectDir, parentID := locate(path)
-	projectName := filepath.Base(projectDir)
 
-	sess := &Session{
-		Info: SessionInfo{
-			ID:              sessionID,
+	return &transcriptParser{
+		info: SessionInfo{
+			ID:              strings.TrimSuffix(basename, ".jsonl"),
 			ProjectDir:      projectDir,
-			ProjectName:     projectName,
+			ProjectName:     filepath.Base(projectDir),
 			FilePath:        path,
-			IsAgent:         isAgent,
+			IsAgent:         strings.HasPrefix(basename, "agent-"),
 			ParentSessionID: parentID,
+			ToolCounts:      make(map[string]int),
 		},
+		usageByMessage: make(map[string]rawUsage),
+		filesRead:      make(map[string]bool),
+		filesWritten:   make(map[string]bool),
+		filesCreated:   make(map[string]bool),
+		launches:       make(map[string]string),
+		churn:          make(map[string]*FileChurn),
+		skills:         make(map[string]bool),
 	}
+}
 
-	// Claude Code writes one JSONL line per content block, with every block of a
-	// single assistant message sharing that message's ID. Usage is repeated
-	// verbatim on each of those lines, so tokens are accumulated once per message
-	// ID while events are emitted from every line.
-	usageByMessage := make(map[string]rawUsage)
+// read consumes the lines in r, which must be positioned at p.offset.
+//
+// A last line with no newline yet may still be being written. It is taken only
+// if it already parses; otherwise it is left for the next read, which will see
+// it whole. Reading the whole file at once gives the same result either way,
+// because a fragment does not parse and was always skipped.
+func (p *transcriptParser) read(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 1024*1024), maxLineBytes)
 
-	// Track unique files
-	filesRead := make(map[string]bool)
-	filesWritten := make(map[string]bool)
-	filesCreated := make(map[string]bool)
-
-	sess.SubagentLaunches = make(map[string]string)
-	churn := make(map[string]*FileChurn)
-	skills := make(map[string]bool)
-	sess.Info.ToolCounts = make(map[string]int)
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB max line
+	// How many bytes the current line took, newline included, and whether it
+	// had one.
+	var advance int
+	var terminated bool
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		n, token, err := bufio.ScanLines(data, atEOF)
+		if n > 0 {
+			advance = n
+			terminated = data[n-1] == '\n'
+		}
+		return n, token, err
+	})
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
+			p.offset += int64(advance)
 			continue
 		}
 
 		var entry rawEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
+			if !terminated {
+				return
+			}
+			p.offset += int64(advance)
 			continue
 		}
+		p.offset += int64(advance)
+		p.feed(entry)
+	}
+	// A line over maxLineBytes ends the scan with an error, and the offset
+	// stays before it — the same place a full parse has always stopped.
+}
 
-		ts := parseTimestamp(entry.Timestamp)
-		if sess.Info.StartTime.IsZero() || (!ts.IsZero() && ts.Before(sess.Info.StartTime)) {
-			sess.Info.StartTime = ts
-		}
-		if ts.After(sess.Info.LastUpdate) {
-			sess.Info.LastUpdate = ts
-		}
+// feed takes one transcript entry into the parse.
+func (p *transcriptParser) feed(entry rawEntry) {
+	info := &p.info
 
-		if sess.Info.CWD == "" && entry.CWD != "" {
-			sess.Info.CWD = entry.CWD
-		}
-		if sess.Info.GitBranch == "" && entry.GitBranch != "" {
-			sess.Info.GitBranch = entry.GitBranch
-		}
-		// Which agent type a subagent run ran as. Claude Code stamps this on
-		// the run's entries, not only its assistant turns.
-		if sess.Info.AgentType == "" && entry.AttributionAgent != "" {
-			sess.Info.AgentType = entry.AttributionAgent
-		}
+	ts := parseTimestamp(entry.Timestamp)
+	if info.StartTime.IsZero() || (!ts.IsZero() && ts.Before(info.StartTime)) {
+		info.StartTime = ts
+	}
+	if ts.After(info.LastUpdate) {
+		info.LastUpdate = ts
+	}
 
-		// Index of the first event this entry contributes, so per-entry flags can
-		// be stamped onto everything it produced.
-		firstNew := len(sess.Events)
+	if info.CWD == "" && entry.CWD != "" {
+		info.CWD = entry.CWD
+	}
+	if info.GitBranch == "" && entry.GitBranch != "" {
+		info.GitBranch = entry.GitBranch
+	}
+	// Which agent type a subagent run ran as. Claude Code stamps this on
+	// the run's entries, not only its assistant turns.
+	if info.AgentType == "" && entry.AttributionAgent != "" {
+		info.AgentType = entry.AttributionAgent
+	}
 
-		switch entry.Type {
-		case "system":
-			switch entry.Subtype {
-			case "compact_boundary":
-				preTokens := 0
-				trigger := ""
-				if entry.CompactMetadata != nil {
-					preTokens = entry.CompactMetadata.PreTokens
-					trigger = entry.CompactMetadata.Trigger
-				}
-				sess.Events = append(sess.Events, Event{
-					Type:             EventCompaction,
-					Timestamp:        ts,
-					UUID:             entry.UUID,
-					CompactPreTokens: preTokens,
-					CompactTrigger:   trigger,
-				})
-			case "turn_duration":
-				sess.Info.ActiveDuration += time.Duration(entry.DurationMs) * time.Millisecond
-				sess.Events = append(sess.Events, Event{
-					Type:           EventTurnDuration,
-					Timestamp:      ts,
-					UUID:           entry.UUID,
-					TurnDurationMs: entry.DurationMs,
-				})
+	// Index of the first event this entry contributes, so per-entry flags can
+	// be stamped onto everything it produced.
+	firstNew := len(p.events)
+
+	switch entry.Type {
+	case "system":
+		switch entry.Subtype {
+		case "compact_boundary":
+			preTokens := 0
+			trigger := ""
+			if entry.CompactMetadata != nil {
+				preTokens = entry.CompactMetadata.PreTokens
+				trigger = entry.CompactMetadata.Trigger
 			}
+			p.events = append(p.events, Event{
+				Type:             EventCompaction,
+				Timestamp:        ts,
+				UUID:             entry.UUID,
+				CompactPreTokens: preTokens,
+				CompactTrigger:   trigger,
+			})
+		case "turn_duration":
+			info.ActiveDuration += time.Duration(entry.DurationMs) * time.Millisecond
+			p.events = append(p.events, Event{
+				Type:           EventTurnDuration,
+				Timestamp:      ts,
+				UUID:           entry.UUID,
+				TurnDurationMs: entry.DurationMs,
+			})
+		}
 
-		case "progress":
-			sess.Events = append(sess.Events, parseProgressEntry(entry, ts)...)
+	case "progress":
+		p.events = append(p.events, parseProgressEntry(entry, ts)...)
 
-		case "attachment":
-			sess.Events = append(sess.Events, parseAttachment(entry, ts)...)
+	case "attachment":
+		p.events = append(p.events, parseAttachment(entry, ts)...)
 
-		case "queue-operation", "file-history-snapshot", "file-history-delta":
-			// Low-value metadata — skip
+	case "queue-operation", "file-history-snapshot", "file-history-delta":
+		// Low-value metadata — skip
 
-		case "user":
-			if entry.Message == nil || entry.IsCompactSummary {
+	case "user":
+		if entry.Message == nil || entry.IsCompactSummary {
+			return
+		}
+		result := decodeToolUseResult(entry.ToolUseResult)
+		events := parseUserMessage(entry, ts, result)
+		p.events = append(p.events, events...)
+
+		for _, e := range events {
+			switch e.Type {
+			case EventUserPrompt:
+				info.UserPrompts++
+			case EventToolResult:
+				if e.IsError {
+					info.Errors++
+				}
+				if e.Result != nil && e.Result.Interrupted {
+					info.Interruptions++
+				}
+			}
+		}
+
+		if entry.ToolDenialKind != "" {
+			info.Denials++
+			p.events = append(p.events, Event{
+				Type:         EventToolDenied,
+				Timestamp:    ts,
+				UUID:         entry.UUID,
+				DenialKind:   entry.ToolDenialKind,
+				UserFeedback: decodeUserFeedback(entry.UserFeedback),
+			})
+		}
+
+	case "assistant":
+		if entry.Message == nil {
+			return
+		}
+		if entry.Message.ID != "" && entry.Message.Usage != nil {
+			p.usageByMessage[entry.Message.ID] = *entry.Message.Usage
+		}
+		// "<synthetic>" marks locally generated messages, not a real model.
+		if entry.Message.Model != "" && entry.Message.Model != "<synthetic>" && info.Model == "" {
+			info.Model = entry.Message.Model
+		}
+
+		events := parseAssistantMessage(entry, ts)
+		p.events = append(p.events, events...)
+
+		for _, e := range events {
+			if e.Type != EventToolUse {
 				continue
 			}
-			result := decodeToolUseResult(entry.ToolUseResult)
-			events := parseUserMessage(entry, ts, result)
-			sess.Events = append(sess.Events, events...)
+			info.ToolCallCount++
+			info.ToolCounts[e.ToolName]++
 
-			for _, e := range events {
-				switch e.Type {
-				case EventUserPrompt:
-					sess.Info.UserPrompts++
-				case EventToolResult:
-					if e.IsError {
-						sess.Info.Errors++
-					}
-					if e.Result != nil && e.Result.Interrupted {
-						sess.Info.Interruptions++
-					}
+			switch e.ToolName {
+			case "Read", "NotebookRead":
+				if fp, ok := stringInput(e.ToolInput, "file_path", "notebook_path"); ok {
+					p.filesRead[fp] = true
 				}
-			}
-
-			if entry.ToolDenialKind != "" {
-				sess.Info.Denials++
-				sess.Events = append(sess.Events, Event{
-					Type:         EventToolDenied,
-					Timestamp:    ts,
-					UUID:         entry.UUID,
-					DenialKind:   entry.ToolDenialKind,
-					UserFeedback: decodeUserFeedback(entry.UserFeedback),
-				})
-			}
-
-		case "assistant":
-			if entry.Message == nil {
-				continue
-			}
-			if entry.Message.ID != "" && entry.Message.Usage != nil {
-				usageByMessage[entry.Message.ID] = *entry.Message.Usage
-			}
-			// "<synthetic>" marks locally generated messages, not a real model.
-			if entry.Message.Model != "" && entry.Message.Model != "<synthetic>" && sess.Info.Model == "" {
-				sess.Info.Model = entry.Message.Model
-			}
-
-			events := parseAssistantMessage(entry, ts)
-			sess.Events = append(sess.Events, events...)
-
-			for _, e := range events {
-				if e.Type != EventToolUse {
-					continue
+			case "Write":
+				if fp, ok := stringInput(e.ToolInput, "file_path"); ok {
+					p.filesCreated[fp] = true
+					churnFor(p.churn, fp).Edits++
 				}
-				sess.Info.ToolCallCount++
-				sess.Info.ToolCounts[e.ToolName]++
-
-				switch e.ToolName {
-				case "Read", "NotebookRead":
-					if fp, ok := stringInput(e.ToolInput, "file_path", "notebook_path"); ok {
-						filesRead[fp] = true
-					}
-				case "Write":
-					if fp, ok := stringInput(e.ToolInput, "file_path"); ok {
-						filesCreated[fp] = true
-						churnFor(churn, fp).Edits++
-					}
-				case "Edit", "MultiEdit", "NotebookEdit":
-					if fp, ok := stringInput(e.ToolInput, "file_path", "notebook_path"); ok {
-						filesWritten[fp] = true
-						churnFor(churn, fp).Edits++
-					}
-				case "Bash", "BashOutput":
-					if e.ToolName == "Bash" {
-						sess.Info.BashCommands++
-					}
-				// Claude Code renamed this tool Task -> Agent; OpenCode transcripts
-				// normalise to "Task". Old transcripts keep the old name forever.
-				case "Task", "Agent":
-					sess.Info.SubagentCalls++
-				case "WebFetch", "WebSearch":
-					sess.Info.WebRequests++
-				case "Skill":
-					if name, ok := stringInput(e.ToolInput, "skill"); ok {
-						skills[name] = true
-					}
+			case "Edit", "MultiEdit", "NotebookEdit":
+				if fp, ok := stringInput(e.ToolInput, "file_path", "notebook_path"); ok {
+					p.filesWritten[fp] = true
+					churnFor(p.churn, fp).Edits++
 				}
-			}
-		}
-
-		recordSubagentLaunch(entry, sess)
-
-		// Stamp sidechain provenance onto everything this entry produced.
-		if entry.IsSidechain {
-			for i := firstNew; i < len(sess.Events); i++ {
-				sess.Events[i].IsSidechain = true
-				sess.Info.SubagentEvents++
+			case "Bash", "BashOutput":
+				if e.ToolName == "Bash" {
+					info.BashCommands++
+				}
+			// Claude Code renamed this tool Task -> Agent; OpenCode transcripts
+			// normalise to "Task". Old transcripts keep the old name forever.
+			case "Task", "Agent":
+				info.SubagentCalls++
+			case "WebFetch", "WebSearch":
+				info.WebRequests++
+			case "Skill":
+				if name, ok := stringInput(e.ToolInput, "skill"); ok {
+					p.skills[name] = true
+				}
 			}
 		}
 	}
+
+	recordSubagentLaunch(entry, p.launches)
+
+	// Stamp sidechain provenance onto everything this entry produced.
+	if entry.IsSidechain {
+		for i := firstNew; i < len(p.events); i++ {
+			p.events[i].IsSidechain = true
+			info.SubagentEvents++
+		}
+	}
+}
+
+// session finishes the parse into a Session.
+//
+// With shared false the session takes p's events and maps as they are, and p
+// must not be used again. With shared true p is left untouched for the next
+// read: the session gets its own copy of everything a later pass writes to —
+// pairing calls with results here, and relinking and redaction in the store —
+// so the next session built from p is built from the transcript as parsed,
+// exactly as a fresh parse would be.
+func (p *transcriptParser) session(shared bool) *Session {
+	sess := &Session{Info: p.info, Events: p.events, SubagentLaunches: p.launches}
+	churn := p.churn
+	if shared {
+		sess.Info.ToolCounts = make(map[string]int, len(p.info.ToolCounts))
+		for k, v := range p.info.ToolCounts {
+			sess.Info.ToolCounts[k] = v
+		}
+		sess.SubagentLaunches = make(map[string]string, len(p.launches))
+		for k, v := range p.launches {
+			sess.SubagentLaunches[k] = v
+		}
+		churn = make(map[string]*FileChurn, len(p.churn))
+		for k, c := range p.churn {
+			copied := *c
+			churn[k] = &copied
+		}
+		sess.Events = cloneEvents(p.events)
+	}
+	filesRead, filesWritten, filesCreated := p.filesRead, p.filesWritten, p.filesCreated
+	skills := p.skills
+	usageByMessage := p.usageByMessage
 
 	// Accumulate token usage once per assistant message.
 	for _, u := range usageByMessage {
@@ -271,7 +373,94 @@ func ParseSessionFile(path string) (*Session, error) {
 	sess.Info.CostUSD = estimateCost(sess.Info)
 	sess.Info.Title = deriveTitle(sess.Events)
 
-	return sess, nil
+	return sess
+}
+
+// cloneEvents copies events deeply enough that nothing done to the copy reaches
+// the original: the tool input, the structured result and the diagnostics are
+// all written to in place by relinking and redaction.
+//
+// One result is shared by every tool_result block of the entry it came from,
+// and that sharing is kept, so the copy is what a fresh parse would have made.
+func cloneEvents(events []Event) []Event {
+	out := make([]Event, len(events))
+	copy(out, events)
+	results := make(map[*ToolResult]*ToolResult)
+	for i := range out {
+		e := &out[i]
+		if e.ToolInput != nil {
+			e.ToolInput = cloneInput(e.ToolInput)
+		}
+		if e.Result != nil {
+			c, ok := results[e.Result]
+			if !ok {
+				c = cloneResult(e.Result)
+				results[e.Result] = c
+			}
+			e.Result = c
+		}
+		if e.Diagnostics != nil {
+			e.Diagnostics = append([]Diagnostic(nil), e.Diagnostics...)
+		}
+	}
+	return out
+}
+
+func cloneInput(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = cloneValue(v)
+	}
+	return out
+}
+
+func cloneValue(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		return cloneInput(t)
+	case []interface{}:
+		out := make([]interface{}, len(t))
+		for i, item := range t {
+			out[i] = cloneValue(item)
+		}
+		return out
+	}
+	return v
+}
+
+func cloneResult(r *ToolResult) *ToolResult {
+	c := *r
+	c.StructuredPatch = cloneHunks(r.StructuredPatch)
+	if r.BashEdit != nil {
+		edit := *r.BashEdit
+		if r.BashEdit.Files != nil {
+			edit.Files = make([]ChangedFile, len(r.BashEdit.Files))
+			for i, f := range r.BashEdit.Files {
+				f.Hunks = cloneHunks(f.Hunks)
+				edit.Files[i] = f
+			}
+		}
+		c.BashEdit = &edit
+	}
+	if r.File != nil {
+		file := *r.File
+		c.File = &file
+	}
+	return &c
+}
+
+func cloneHunks(hunks []PatchHunk) []PatchHunk {
+	if hunks == nil {
+		return nil
+	}
+	out := make([]PatchHunk, len(hunks))
+	for i, h := range hunks {
+		if h.Lines != nil {
+			h.Lines = append([]string(nil), h.Lines...)
+		}
+		out[i] = h
+	}
+	return out
 }
 
 func parseUserMessage(entry rawEntry, ts time.Time, result *ToolResult) []Event {
@@ -452,7 +641,7 @@ var agentIDPattern = regexp.MustCompile(`agentId:\s*([0-9a-f]{8,})`)
 // transcript under <session>/subagents/. The only link back to the call that
 // started it is the agent id in that result, so it is captured here and used to
 // splice the subagent's turns into this session's timeline.
-func recordSubagentLaunch(entry rawEntry, sess *Session) {
+func recordSubagentLaunch(entry rawEntry, launches map[string]string) {
 	if entry.Message == nil {
 		return
 	}
@@ -474,7 +663,7 @@ func recordSubagentLaunch(entry rawEntry, sess *Session) {
 			continue
 		}
 		if m := agentIDPattern.FindSubmatch(text); m != nil {
-			sess.SubagentLaunches[toolUseID] = string(m[1])
+			launches[toolUseID] = string(m[1])
 		}
 	}
 }
