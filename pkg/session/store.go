@@ -45,6 +45,10 @@ type Store struct {
 	// and never changed after, which is what makes it safe to read without
 	// the lock.
 	redact bool
+
+	// live holds the parse of each transcript being written to, so a reload
+	// reads only what was appended. See live.go.
+	live liveTranscripts
 }
 
 // prepare is everything that happens to a session between parsing it and
@@ -400,7 +404,8 @@ func (s *Store) watchNewProject(dir string) {
 }
 
 // reload re-parses one transcript after it changed, and restores the subagent
-// links that a fresh parse drops.
+// links that a fresh parse drops. Both parses read only what was appended
+// since the file was last read (parseLive).
 //
 // A parsed file holds only its own events, so re-parsing a parent throws away
 // the subagent turns that were spliced into it, and re-parsing a subagent
@@ -408,7 +413,7 @@ func (s *Store) watchNewProject(dir string) {
 // rebuilt from disk and all of its children are spliced in again, which is
 // cheap — one parent and its agents — and idempotent.
 func (s *Store) reload(path string) {
-	sess, err := ParseSessionFile(path)
+	sess, err := s.parseLive(path)
 	if err != nil || len(sess.Events) == 0 {
 		return
 	}
@@ -432,7 +437,7 @@ func (s *Store) reload(path string) {
 	// Re-parse the parent so it starts from a clean timeline. If it has gone
 	// from disk, the subagent still stands on its own.
 	if parentPath != path {
-		if parent, err := ParseSessionFile(parentPath); err == nil && len(parent.Events) > 0 {
+		if parent, err := s.parseLive(parentPath); err == nil && len(parent.Events) > 0 {
 			s.prepare(parent)
 			s.mu.Lock()
 			s.sessions[parent.Info.ID] = parent
@@ -450,9 +455,14 @@ func (s *Store) reload(path string) {
 }
 
 // load parses one transcript into the store, ignoring files that fail to parse
-// or carry no events.
+// or carry no events. One written recently keeps its parse, so its next change
+// is read incrementally rather than paying a full parse first.
 func (s *Store) load(path string) {
-	sess, err := ParseSessionFile(path)
+	parse := ParseSessionFile
+	if recentlyWritten(path) {
+		parse = s.parseLive
+	}
+	sess, err := parse(path)
 	if err != nil || len(sess.Events) == 0 {
 		return
 	}

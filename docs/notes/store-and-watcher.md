@@ -33,6 +33,41 @@ Every write reset the 500ms timer, so an agent writing faster than that could
 postpone its own reload indefinitely. `watchMaxDelay` (2s) forces a reload once
 a file has been dirty that long.
 
+## A reload re-parsed the whole file
+
+Every write to a live transcript re-parsed it from the first byte. A long
+session's file reaches hundreds of megabytes — one here was 380MB, about five
+seconds of CPU to parse — and `watchMaxDelay` reloads a busy file every two
+seconds, in every process holding a `Store` (each verbose window, and pidash's
+reporter). A live session kept a core busy in each of them.
+
+`parseLive` (`live.go`) keeps the parse of each recently written transcript and
+reads only what was appended: about 80ms for that file instead of four seconds.
+The traps:
+
+- **One parser, not two.** `ParseSessionFile` is `transcriptParser` fed the
+  whole file, so a full parse and an incremental one cannot disagree.
+  `TestLiveParseMatchesFullParseAsTheFileGrows` grows a transcript a few bytes
+  at a time and compares after every read; the real-transcript test does the
+  same with files on the machine.
+- **Only whole lines are consumed.** A last line without its newline may still
+  be being written, and is taken only if it already parses. A fragment never
+  parses, so the next read sees it whole.
+- **What is handed out is a copy.** Pairing calls with results, relinking and
+  redaction all write into events in place — the tool input map, the
+  `*ToolResult`. Done to the kept parse, the next reload would do them again,
+  and relinking is not idempotent: a folder moved into itself relinks
+  `/repo/a.go` to `/repo/moved/a.go`, then `/repo/moved/moved/a.go`.
+  `cloneEvents` copies everything those passes touch, and keeps the one
+  `*ToolResult` an entry's blocks share as one.
+- **A shorter file has been replaced** and is read from the start. Claude Code
+  only appends.
+- **Only recent transcripts keep a parse** (`liveIdle`, 15 minutes), so the
+  whole history is not held in memory twice. A session resumed after that
+  pays one full parse, which is what every write used to cost.
+- A subagent writing rebuilds its parent, and that parent rebuild is
+  incremental too, which matters because the parent is usually the large one.
+
 ## What was fine
 
 The watcher itself. It handles `fsnotify.Write|Create` on `*.jsonl`, so appends

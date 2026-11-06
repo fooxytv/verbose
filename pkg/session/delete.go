@@ -61,6 +61,7 @@ func (s *Store) DeleteSession(id string) (DeleteOutcome, error) {
 	s.mu.Lock()
 	delete(s.sessions, id)
 	s.mu.Unlock()
+	s.live.forget(sess.Info.FilePath)
 
 	return out, nil
 }
