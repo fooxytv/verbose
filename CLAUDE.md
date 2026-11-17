@@ -163,6 +163,10 @@ Verified against real data; each of these cost a bug to learn.
 - **`toolUseResult` is an object on success and a bare string on failure**
   ("Error: Exit code 127"). That string is the reliable failure signal —
   `is_error` is false for a failing shell command.
+- **A loaded skill's text is a user-role entry**, `isMeta: true` with
+  `sourceToolUseID` naming the `Skill` call, written after that call's
+  "Launching skill: x" result. It is folded into the call's output; read as an
+  ordinary entry it showed as a prompt the person never typed.
 - **Extended thinking is not retained.** Every thinking block on disk has an
   empty body, so a replay can say what happened and not why.
 - **`cwd` beats the directory name.** The encoded project directory cannot tell

@@ -1,4 +1,6 @@
 verbose
+verbose.exe
+verbose.exe.old
 dist/
 .env
 
