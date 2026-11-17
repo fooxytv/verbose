@@ -60,6 +60,10 @@ type transcriptParser struct {
 	churn        map[string]*FileChurn // edit counts only; lines come from results
 	skills       map[string]bool
 
+	// Text a tool loaded into the context (a skill's instructions), held by the
+	// call's ID until that call's result has been read.
+	pendingLoaded map[string]string
+
 	// offset is how many bytes of the file have been consumed: always the end
 	// of a complete line, so the next read starts at the start of one.
 	offset int64
@@ -86,6 +90,7 @@ func newTranscriptParser(path string) *transcriptParser {
 		launches:       make(map[string]string),
 		churn:          make(map[string]*FileChurn),
 		skills:         make(map[string]bool),
+		pendingLoaded:  make(map[string]string),
 	}
 }
 
@@ -202,8 +207,23 @@ func (p *transcriptParser) feed(entry rawEntry) {
 		if entry.Message == nil || entry.IsCompactSummary {
 			return
 		}
+		// What a tool loaded is part of that tool's output, not a prompt: shown
+		// as one, a skill's instructions read as if the person had typed them.
+		if entry.IsMeta && entry.SourceToolUseID != "" {
+			if text := messageText(entry.Message); text != "" {
+				p.attachLoaded(entry.SourceToolUseID, text)
+				return
+			}
+		}
 		result := decodeToolUseResult(entry.ToolUseResult)
 		events := parseUserMessage(entry, ts, result)
+		for i := range events {
+			e := &events[i]
+			if text, ok := p.pendingLoaded[e.ToolID]; ok && e.Type == EventToolResult {
+				e.ToolOutput = joinLoaded(e.ToolOutput, text)
+				delete(p.pendingLoaded, e.ToolID)
+			}
+		}
 		p.events = append(p.events, events...)
 
 		for _, e := range events {
@@ -461,6 +481,48 @@ func cloneHunks(hunks []PatchHunk) []PatchHunk {
 		out[i] = h
 	}
 	return out
+}
+
+// attachLoaded adds text a tool loaded into the context to that tool's result.
+// The result is written first, so it is normally already parsed; if not, the
+// text waits for it.
+func (p *transcriptParser) attachLoaded(toolID, text string) {
+	for i := len(p.events) - 1; i >= 0; i-- {
+		e := &p.events[i]
+		if e.Type == EventToolResult && e.ToolID == toolID {
+			e.ToolOutput = joinLoaded(e.ToolOutput, text)
+			return
+		}
+	}
+	p.pendingLoaded[toolID] = joinLoaded(p.pendingLoaded[toolID], text)
+}
+
+func joinLoaded(output, text string) string {
+	if strings.TrimSpace(output) == "" {
+		return text
+	}
+	return output + "\n\n" + text
+}
+
+// messageText is the text blocks of a message, joined.
+func messageText(m *rawMessage) string {
+	switch c := m.Content.(type) {
+	case string:
+		return strings.TrimSpace(c)
+	case []interface{}:
+		var parts []string
+		for _, block := range c {
+			b, ok := block.(map[string]interface{})
+			if !ok || b["type"] != "text" {
+				continue
+			}
+			if t, _ := b["text"].(string); strings.TrimSpace(t) != "" {
+				parts = append(parts, t)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n\n"))
+	}
+	return ""
 }
 
 func parseUserMessage(entry rawEntry, ts time.Time, result *ToolResult) []Event {

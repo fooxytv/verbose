@@ -212,6 +212,12 @@ type rawEntry struct {
 	ToolDenialKind   string          `json:"toolDenialKind"`
 	UserFeedback     json.RawMessage `json:"userFeedback"`
 	Attachment       json.RawMessage `json:"attachment"`
+
+	// A user-role entry Claude Code wrote itself rather than the person typing,
+	// and the tool call it belongs to: loading a skill writes the skill's text
+	// this way, straight after the call's "Launching skill: x" result.
+	IsMeta          bool   `json:"isMeta"`
+	SourceToolUseID string `json:"sourceToolUseID"`
 }
 
 // ToolResult is the decoded toolUseResult payload. Fields are populated
