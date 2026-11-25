@@ -1,6 +1,7 @@
 # Working with sessions
 
-Opening files, picking a session back up, renaming folders, deleting.
+Opening files, picking a session back up, starting a new one, renaming
+folders, deleting.
 
 
 `e` hands the file under the tree cursor to your own editor — in a replay, in
@@ -46,7 +47,8 @@ buffer called `+41`, so verbose would rather lose the jump than do that.
 
 `c` in a replay or the tree opens the **continue panel**: what the session last
 said, and a box to reply in. Type, press enter, and the CLI opens **beside**
-verbose — a tmux split where there is one, otherwise a new terminal tab — with
+verbose — a tmux split where there is one, otherwise a new terminal tab (see
+[where "beside" is](#starting-a-new-agent)) — with
 that session resumed and your reply already sent. The replay, the tree and your
 place in them stay on screen.
 
@@ -64,6 +66,34 @@ parser to end up with a worse tmux.
 A subagent's own transcript cannot be replied to — open its parent session —
 and neither can one that recorded no working directory, since there would be
 nowhere to start the CLI. The panel says so rather than failing quietly.
+
+## Starting a new agent
+
+`n` in the sessions list, a timeline or the project view opens the **launch
+panel**. It starts on the folder and agent of the session under the cursor;
+tab (or ↑/↓) moves between the fields, ←/→ changes one:
+
+- **Folder**: every folder a session has run in that still exists, most
+  recently used first.
+- **Agent**: claude, codex, opencode, copilot or pi.
+- **Mode**: *agent* runs the prompt as typed. *orchestrator* (Claude Code
+  only) adds a brief to the system prompt, through
+  `--append-system-prompt-file`, telling it to plan the work, hand the pieces
+  to subagents, check what they report, have the result reviewed and stop for
+  the decisions that are yours. The brief is written to
+  `<user cache dir>/verbose/orchestrator.md` on each launch.
+- **Prompt**: what it should do. Enter with nothing typed opens the CLI
+  empty, which is what `n` did before the panel existed.
+
+Enter starts it beside verbose, the same way `c` does, and it appears in the
+list as soon as it writes its first line.
+
+**Where "beside" is**: a tmux split inside tmux; a new tab in the same window
+in Windows Terminal; a new tab in iTerm2; a new window in Terminal.app.
+Anywhere else verbose hands its own terminal to the CLI and comes back when it
+exits. Windows Terminal re-reads the command line it is given, so verbose
+escapes `;` (which would start a second wt command) and quotes (which it would
+drop) for it, and resolves npm shims such as `codex.cmd` to their full path.
 
 ## After renaming or moving a folder
 

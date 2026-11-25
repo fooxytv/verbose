@@ -92,6 +92,11 @@ type Model struct {
 	continueOpen   bool
 	continueDraft  string
 	continueScroll int
+
+	// The launch panel, opened with "n": where to start a new agent, which one,
+	// and whether it orchestrates. Like a reply, it runs beside verbose.
+	launchOpen bool
+	launch     launchForm
 	// treeGen invalidates fade ticks left over from an earlier step.
 	treeGen int
 
@@ -591,9 +596,17 @@ func (m Model) View() string {
 	// The footer holds one thing at a time. A pending delete outranks a status
 	// message, which outranks the help: appending them instead pushed the text
 	// past the right edge, so a delete looked like it had done nothing.
+	// The launch panel stands in for whichever view opened it.
+	if m.launchOpen {
+		content = renderLaunch(m.launch, usableWidth(m.width), max(1, m.height-1))
+	}
+
 	switch {
 	case m.confirmDelete != nil:
 		help = deletePrompt(*m.confirmDelete)
+	case m.launchOpen && m.statusMsg == "":
+		help = searchPromptStyle.Render(" new agent ") + " " +
+			mutedStyle.Render("tab/↑↓ field · ←/→ change · enter start · esc cancel")
 	case m.continueOpen:
 		help = searchPromptStyle.Render(" reply ") + " " +
 			mutedStyle.Render("enter to open the CLI beside verbose · ↑/↓ read · esc cancel")
@@ -803,6 +816,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// every letter of the query would trigger a command.
 	if m.searchTyping {
 		return m.handleSearchKey(msg, key)
+	}
+
+	// So is the launch panel.
+	if m.launchOpen {
+		return m.handleLaunchKey(msg, key)
 	}
 
 	// The continue panel is a text box, so it takes every key.
@@ -1081,7 +1099,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "n":
-		// New session in same project CWD
+		// The launch panel, starting on the folder and agent under the cursor.
 		var info *session.SessionInfo
 		switch m.mode {
 		case viewSessions:
@@ -1100,13 +1118,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				info = &s
 			}
 		}
-		if info != nil {
-			if why := missingCWD(info.CWD); why != "" {
-				m.fail(why)
-				return m, clearStatusAfter()
-			}
-			return m, newSessionCmd(info.Source, info.CWD)
-		}
+		// With nothing under the cursor the panel still opens, on the most
+		// recently used folder: starting an agent does not need a session.
+		m.openLaunch(info)
+		return m, nil
 
 	case "y":
 		// Yank last user prompt to clipboard

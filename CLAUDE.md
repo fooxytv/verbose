@@ -714,6 +714,27 @@ directly instead.
   `relPath` abbreviates to `…/dir/file`, and a step with a real diff has none at
   all. `ReplayStep.FilePath` is the absolute one.
 
+## Starting agents (`n`) and Windows Terminal
+
+`internal/ui/launch.go` is the panel; `launchInTerminal` in `resume.go` is
+shared with `c`, so a change to where "beside" is changes both.
+
+- **wt re-parses its command line and joins it back WITHOUT re-escaping.**
+  Verified by launching a real tab and reading back the argv it received: a
+  bare `;` starts another wt command (escape `\;`), quotes vanish
+  (`fix the "login" bug` arrived as `fix the login bug`), and a trailing
+  backslash on an argument with a space eats the closing quote wt adds.
+  `escapeQuotesForArgv` handles the last two; `TestEscapeQuotesForArgv` holds
+  the cases. An empty argument is dropped, which `launchArgs` never sends.
+- **The tab is started with CreateProcess**, which finds `claude.exe` but not
+  an npm shim like `codex.cmd`, so the CLI is resolved with `exec.LookPath`
+  first.
+- **The orchestrator brief goes by file** (`--append-system-prompt-file`),
+  never as an argument: it is multi-line, and a newline in tmux `send-keys` is
+  an Enter.
+- Orchestrator mode is Claude Code only; the panel refuses the others rather
+  than launching a plain agent the user did not ask for.
+
 ## Testing
 
 - `go test ./...` should stay under ~20s. The replay smoke sweep strides
