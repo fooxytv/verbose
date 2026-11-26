@@ -74,7 +74,13 @@ panel**. It starts on the folder and agent of the session under the cursor;
 tab (or ↑/↓) moves between the fields, ←/→ changes one:
 
 - **Folder**: every folder a session has run in that still exists, most
-  recently used first.
+  recently used first, then **+ new folder**. That one adds two fields:
+  **Under**, the folders your projects already live in (most recent first)
+  and then your home folder, and **Name**, typed. A name starting with `~` or
+  an absolute path is taken as it is; `..` is refused. Enter creates the folder
+  (or uses it, if it already exists) and starts the agent in it. The panel opens
+  on a new folder when the session under the cursor ran in your home folder,
+  or when verbose has seen no folders yet, rather than starting in home.
 - **Agent**: claude, codex, opencode, copilot or pi.
 - **Mode**: *agent* runs the prompt as typed. *orchestrator* (Claude Code
   only) adds a brief to the system prompt, through

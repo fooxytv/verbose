@@ -26,9 +26,12 @@ var launchAgents = []string{"claude", "codex", "opencode", "copilot", "pi"}
 // hands it to subagents. Only Claude Code can be told to be an orchestrator.
 var launchModes = []string{"agent", "orchestrator"}
 
-// The panel's fields, in the order tab moves through them.
+// The panel's fields, in the order tab moves through them. Under and Name are
+// only there while the folder is a new one (see fields).
 const (
 	launchFieldFolder = iota
+	launchFieldUnder
+	launchFieldName
 	launchFieldAgent
 	launchFieldMode
 	launchFieldPrompt
@@ -50,7 +53,10 @@ const orchestratorBrief = `You are running as an orchestrator. Your job is to ge
 // launchForm is the panel's state.
 type launchForm struct {
 	folders []string // most recently used first
-	folder  int
+	folder  int      // len(folders) is "+ new folder"
+	parents []string // where a new folder can go, for the Under field
+	parent  int
+	name    string // the new folder's name
 	agent   int
 	mode    int
 	field   int
@@ -59,11 +65,81 @@ type launchForm struct {
 
 func (f launchForm) agentName() string { return launchAgents[f.agent] }
 func (f launchForm) modeName() string  { return launchModes[f.mode] }
-func (f launchForm) folderPath() string {
-	if f.folder < len(f.folders) {
-		return f.folders[f.folder]
+
+// newFolder is true when the panel is creating a folder rather than picking one.
+func (f launchForm) newFolder() bool { return f.folder >= len(f.folders) }
+
+// fields lists the fields tab moves through, in order.
+func (f launchForm) fields() []int {
+	if f.newFolder() {
+		return []int{launchFieldFolder, launchFieldUnder, launchFieldName, launchFieldAgent, launchFieldMode, launchFieldPrompt}
 	}
-	return ""
+	return []int{launchFieldFolder, launchFieldAgent, launchFieldMode, launchFieldPrompt}
+}
+
+func (f launchForm) parentPath() string {
+	if f.parent < len(f.parents) {
+		return f.parents[f.parent]
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+// folderPath is where the agent will run: the chosen folder, or the new one.
+func (f launchForm) folderPath() (string, error) {
+	if !f.newFolder() {
+		return f.folders[f.folder], nil
+	}
+	return newFolderPath(f.parentPath(), f.name)
+}
+
+// newFolderPath resolves a typed name: under parent, or as typed when it is
+// absolute or starts with ~. ".." is refused so a name cannot climb out of
+// the folder shown beside it.
+func newFolderPath(parent, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("Type a name for the new folder.")
+	}
+	for _, seg := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." {
+			return "", fmt.Errorf("A folder name cannot contain \"..\".")
+		}
+	}
+	switch {
+	case name == "~" || strings.HasPrefix(name, "~/") || strings.HasPrefix(name, `~\`):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, name[1:]), nil
+	case filepath.IsAbs(name):
+		return filepath.Clean(name), nil
+	}
+	return filepath.Join(parent, name), nil
+}
+
+// launchParents offers the folders the projects live in, most recent first,
+// then the home folder. The home folder's own parent and the root are left out:
+// nobody keeps a project in /home or C:\Users.
+func launchParents(folders []string) []string {
+	home, _ := os.UserHomeDir()
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] || (home != "" && p == filepath.Dir(home)) || filepath.Dir(p) == p {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	for _, d := range folders {
+		if d != home {
+			add(filepath.Dir(d))
+		}
+	}
+	add(home)
+	return out
 }
 
 // launchFolders lists the folders sessions have run in, most recent first,
@@ -124,9 +200,13 @@ func launchArgs(agent, mode, prompt, briefPath string) (cli string, args []strin
 }
 
 // openLaunch opens the panel, starting on the folder of the session under the
-// cursor (if any) and the agent that ran it.
+// cursor (if any) and the agent that ran it. A session in the home folder is
+// almost never where new work should start, so that, or having no folders at
+// all, opens on a new folder with the cursor on its name.
 func (m *Model) openLaunch(current *session.SessionInfo) {
-	f := launchForm{folders: launchFolders(m.store.GetSessions()), field: launchFieldPrompt}
+	folders := launchFolders(m.store.GetSessions())
+	f := launchForm{folders: folders, parents: launchParents(folders), field: launchFieldPrompt}
+	home, _ := os.UserHomeDir()
 	if current != nil {
 		for i, d := range f.folders {
 			if d == current.CWD {
@@ -139,6 +219,10 @@ func (m *Model) openLaunch(current *session.SessionInfo) {
 			}
 		}
 	}
+	if len(f.folders) == 0 || f.folders[f.folder] == home {
+		f.folder = len(f.folders)
+		f.field = launchFieldName
+	}
 	m.launch = f
 	m.launchOpen = true
 }
@@ -150,8 +234,8 @@ func (m *Model) closeLaunch() {
 
 // launchUnsupported explains why the form cannot launch, or returns empty.
 func launchUnsupported(f launchForm) string {
-	if len(f.folders) == 0 {
-		return "No folder to start in: verbose has not seen a session in a folder that still exists."
+	if _, err := f.folderPath(); err != nil {
+		return err.Error()
 	}
 	if f.modeName() == "orchestrator" && f.agentName() != "claude" {
 		return "Only Claude Code can run as an orchestrator. Choose claude, or the agent mode."
@@ -167,15 +251,29 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		m.closeLaunch()
 		return m, nil
 	case "tab", "down":
-		f.field = (f.field + 1) % launchFieldCount
+		f.field = f.step(1)
 		return m, nil
 	case "shift+tab", "up":
-		f.field = (f.field + launchFieldCount - 1) % launchFieldCount
+		f.field = f.step(-1)
 		return m, nil
 	case "enter":
 		if why := launchUnsupported(*f); why != "" {
 			m.warn(why)
 			return m, clearStatusAfter()
+		}
+		cwd, _ := f.folderPath()
+		created := false
+		if f.newFolder() {
+			if info, err := os.Stat(cwd); err == nil && !info.IsDir() {
+				m.fail(cwd + " is a file, not a folder.")
+				return m, clearStatusAfter()
+			} else if err != nil {
+				if err := os.MkdirAll(cwd, 0o755); err != nil {
+					m.fail("Could not create the folder: " + err.Error())
+					return m, clearStatusAfter()
+				}
+				created = true
+			}
 		}
 		brief := ""
 		label := f.agentName()
@@ -188,12 +286,18 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			}
 		}
 		cli, args := launchArgs(f.agentName(), f.modeName(), f.draft, brief)
-		cwd := f.folderPath()
 		m.closeLaunch()
 		m.statusMsg = "Starting " + label + " in " + filepath.Base(cwd) + "…"
+		if created {
+			m.statusMsg = "Created " + cwd + " · starting " + label + "…"
+		}
 		return m, tea.Batch(launchInTerminal(cli, args, cwd), clearStatusAfter())
 	}
 
+	if f.field == launchFieldName {
+		f.name = editText(f.name, msg, key, 255)
+		return m, nil
+	}
 	if f.field != launchFieldPrompt {
 		step := 0
 		switch key {
@@ -208,7 +312,9 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		if step != 0 {
 			switch f.field {
 			case launchFieldFolder:
-				f.folder = cycle(f.folder, step, len(f.folders))
+				f.folder = cycle(f.folder, step, len(f.folders)+1)
+			case launchFieldUnder:
+				f.parent = cycle(f.parent, step, len(f.parents))
 			case launchFieldAgent:
 				f.agent = cycle(f.agent, step, len(launchAgents))
 			case launchFieldMode:
@@ -218,24 +324,40 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 
+	f.draft = editText(f.draft, msg, key, continueMaxReply)
+	return m, nil
+}
+
+// step moves to the next or previous field that is showing, wrapping.
+func (f launchForm) step(dir int) int {
+	fields := f.fields()
+	at := 0
+	for i, fl := range fields {
+		if fl == f.field {
+			at = i
+		}
+	}
+	return fields[cycle(at, dir, len(fields))]
+}
+
+// editText applies one key to a text field of at most limit characters.
+func editText(s string, msg tea.KeyMsg, key string, limit int) string {
 	switch key {
 	case "backspace":
-		if r := []rune(f.draft); len(r) > 0 {
-			f.draft = string(r[:len(r)-1])
+		if r := []rune(s); len(r) > 0 {
+			return string(r[:len(r)-1])
 		}
-		return m, nil
+		return s
 	case "ctrl+u":
-		f.draft = ""
-		return m, nil
+		return ""
 	}
 	if isSpace(msg) {
-		f.draft += " "
-		return m, nil
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
 	}
-	if msg.Type == tea.KeyRunes && len([]rune(f.draft)) < continueMaxReply {
-		f.draft += string(msg.Runes)
+	if msg.Type == tea.KeyRunes && len([]rune(s))+len(msg.Runes) <= limit {
+		return s + string(msg.Runes)
 	}
-	return m, nil
+	return s
 }
 
 // writeOrchestratorBrief writes the brief where Claude Code can read it and
@@ -281,13 +403,31 @@ func renderLaunch(f launchForm, width, height int) string {
 		b.WriteString(clampWidth(marker+headerLabelStyle.Render(padRight(label, 8))+" "+val+pos, width) + "\n")
 	}
 
-	folder := f.folderPath()
-	if folder == "" {
-		folder = "(none)"
-	} else {
-		folder = shortenMiddle(folder, max(10, width-30))
+	folder := "+ new folder"
+	if !f.newFolder() {
+		folder = shortenMiddle(f.folders[f.folder], max(10, width-30))
 	}
-	choice(launchFieldFolder, "Folder", folder, f.folder, len(f.folders))
+	choice(launchFieldFolder, "Folder", folder, f.folder, len(f.folders)+1)
+	if f.newFolder() {
+		choice(launchFieldUnder, "Under", shortenMiddle(f.parentPath(), max(10, width-30)), f.parent, len(f.parents))
+		marker := "  "
+		name := mutedStyle.Render("type a name")
+		if f.name != "" {
+			name = textStyle.Render(f.name)
+		}
+		if f.field == launchFieldName {
+			marker = searchPromptStyle.Render("▐") + " "
+			name = selectedStyle.Render(" " + f.name + "▌ ")
+		}
+		b.WriteString(clampWidth(marker+headerLabelStyle.Render(padRight("Name", 8))+" "+name, width) + "\n")
+		if path, err := f.folderPath(); err == nil {
+			what := "creates "
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				what = "already exists, starts in "
+			}
+			b.WriteString(clampWidth("           "+mutedStyle.Render(what+shortenMiddle(path, max(10, width-40))), width) + "\n")
+		}
+	}
 	choice(launchFieldAgent, "Agent", f.agentName(), f.agent, len(launchAgents))
 	choice(launchFieldMode, "Mode", f.modeName(), f.mode, len(launchModes))
 	b.WriteString("\n")
