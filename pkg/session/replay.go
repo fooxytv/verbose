@@ -435,7 +435,11 @@ func describeTool(e Event, cwd string) string {
 
 	case "Skill":
 		s, _ := stringInput(e.ToolInput, "skill")
-		return fmt.Sprintf("Loaded the %s skill — a set of instructions for this kind of task.", s)
+		out := fmt.Sprintf("Loaded the %s skill — a set of instructions for this kind of task.", s)
+		if args, ok := stringInput(e.ToolInput, "args"); ok && strings.TrimSpace(args) != "" {
+			out += " Asked with: " + collapseSpaces(args)
+		}
+		return out
 
 	case "TodoWrite":
 		return "Rewrote the task list, which is how the agent tracks multi-step work."
