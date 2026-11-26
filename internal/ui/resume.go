@@ -4,16 +4,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 // launchInTerminal opens a CLI command in the best available terminal.
-// Detection priority: tmux (split pane) > iTerm2 (new tab) > Terminal.app > in-place.
+// Detection priority: tmux (split pane) > Windows Terminal (new tab) > iTerm2
+// (new tab) > Terminal.app > in-place.
 func launchInTerminal(cli string, args []string, cwd string) tea.Cmd {
 	if os.Getenv("TMUX") != "" {
 		return launchInTmux(cli, args, cwd)
+	}
+	if runtime.GOOS == "windows" && os.Getenv("WT_SESSION") != "" {
+		if wt, err := exec.LookPath("wt"); err == nil {
+			return launchInWindowsTerminal(wt, cli, args, cwd)
+		}
 	}
 	if os.Getenv("ITERM_SESSION_ID") != "" {
 		return launchInITermTab(cli, args, cwd)
@@ -48,22 +56,6 @@ func resumeArgs(sessionID string) (cli string, args []string) {
 		return "pi", []string{"--session", id}
 	}
 	return "claude", []string{"--resume", sessionID}
-}
-
-// newSessionCmd starts a fresh CLI session (no --resume) in the same CWD.
-func newSessionCmd(source, cwd string) tea.Cmd {
-	cli := "claude"
-	switch source {
-	case "opencode":
-		cli = "opencode"
-	case "codex":
-		cli = "codex"
-	case "copilot":
-		cli = "copilot"
-	case "pi":
-		cli = "pi"
-	}
-	return launchInTerminal(cli, nil, cwd)
 }
 
 // forkSessionCmd starts a new CLI session with the last prompt as the first message.
@@ -120,6 +112,78 @@ func launchInTmux(cli string, args []string, cwd string) tea.Cmd {
 
 		return resumeStartedMsg{newTab: true}
 	}
+}
+
+// launchInWindowsTerminal opens a new tab in the Windows Terminal window
+// verbose is running in (-w 0) and runs the command there.
+func launchInWindowsTerminal(wt, cli string, args []string, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		c := exec.Command(wt, wtArgs(cli, args, cwd)...)
+		if err := c.Start(); err != nil {
+			return resumeDoneMsg{err: err}
+		}
+		go c.Wait() // wt hands the tab to the running window and exits
+		return resumeStartedMsg{newTab: true}
+	}
+}
+
+// wtArgs builds wt's command line, kept apart from launching it so that what
+// gets run can be asserted.
+//
+// Three traps. wt treats a bare ";" anywhere in its command line as the start
+// of another wt command, so a prompt containing one would be cut in two and the
+// rest run as a wt subcommand; "\;" is its escape. wt also parses the command
+// line and joins it back together for the tab WITHOUT re-escaping quotes, so
+// `fix the "login" bug` reached the CLI as `fix the login bug` until every quote
+// was escaped once more for that second parse. And the tab is started with
+// CreateProcess, which finds an .exe on PATH but not an npm shim such as
+// codex.cmd, so the CLI is resolved to its full path first.
+func wtArgs(cli string, args []string, cwd string) []string {
+	if p, err := exec.LookPath(cli); err == nil {
+		cli = p
+	}
+	out := []string{"-w", "0", "new-tab", "--title", filepath.Base(strings.TrimSuffix(cli, filepath.Ext(cli)))}
+	if cwd != "" {
+		out = append(out, "-d", cwd)
+	}
+	out = append(out, cli)
+	for _, a := range args {
+		out = append(out, strings.ReplaceAll(escapeQuotesForArgv(a), ";", `\;`))
+	}
+	return out
+}
+
+// escapeQuotesForArgv escapes each double quote the way Windows argv parsing
+// reads it: the backslashes before a quote are doubled and one more is added,
+// so the quote and the backslashes both survive one more parse. wt wraps an
+// argument with a space in quotes when it joins the line back together, so
+// backslashes at the END of one are doubled too, or they would escape that
+// closing quote and run the argument into the next.
+func escapeQuotesForArgv(s string) string {
+	quoted := strings.ContainsAny(s, " \t")
+	if !strings.Contains(s, `"`) && !(quoted && strings.HasSuffix(s, `\`)) {
+		return s
+	}
+	var b strings.Builder
+	slashes := 0
+	for _, r := range s {
+		switch r {
+		case '\\':
+			slashes++
+			continue
+		case '"':
+			b.WriteString(strings.Repeat(`\`, slashes*2+1))
+		default:
+			b.WriteString(strings.Repeat(`\`, slashes))
+		}
+		slashes = 0
+		b.WriteRune(r)
+	}
+	if quoted {
+		slashes *= 2
+	}
+	b.WriteString(strings.Repeat(`\`, slashes))
+	return b.String()
 }
 
 // launchInITermTab opens a new iTerm2 tab and runs the command.
