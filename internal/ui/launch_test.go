@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -155,9 +156,19 @@ func TestLaunchPanelKeys(t *testing.T) {
 		t.Fatalf("field = %d, want folder", m.launch.field)
 	}
 	m = pressLaunch(m, "left")
-	if m.launch.folder != 2 {
-		t.Errorf("folder = %d, want left to wrap to the last", m.launch.folder)
+	if !m.launch.newFolder() {
+		t.Errorf("folder = %d, want left to wrap to the last entry, a new folder", m.launch.folder)
 	}
+	// A new folder brings in Under and Name, and the name takes typing.
+	m = pressLaunch(m, "tab", "tab", "a", "p", "p", "l", "h")
+	if m.launch.field != launchFieldName || m.launch.name != "applh" {
+		t.Fatalf("field %d name %q, want typing to reach the name", m.launch.field, m.launch.name)
+	}
+	m = pressLaunch(m, "backspace", "backspace", "shift+tab", "shift+tab", "right")
+	if m.launch.newFolder() || m.launch.folder != 0 {
+		t.Fatalf("folder = %d, want right to wrap back to the first", m.launch.folder)
+	}
+	// With an existing folder chosen, tab skips the hidden Under and Name.
 	m = pressLaunch(m, "tab", "right", "right")
 	if m.launch.agentName() != launchAgents[2] {
 		t.Errorf("agent = %s", m.launch.agentName())
@@ -190,12 +201,65 @@ func TestLaunchRefusesOrchestratorForOtherAgents(t *testing.T) {
 	}
 }
 
+// A typed name goes under the chosen parent; ~ and an absolute path are taken
+// as typed; ".." cannot climb out.
+func TestNewFolderPath(t *testing.T) {
+	parent := t.TempDir()
+	home, _ := os.UserHomeDir()
+	abs := filepath.Join(t.TempDir(), "elsewhere")
+	for name, want := range map[string]string{
+		"app":            filepath.Join(parent, "app"),
+		"  app  ":        filepath.Join(parent, "app"),
+		"group/app":      filepath.Join(parent, "group", "app"),
+		"~/code/app":     filepath.Join(home, "code", "app"),
+		abs:              abs,
+		"":               "",
+		"../app":         "",
+		"a/../../escape": "",
+	} {
+		got, err := newFolderPath(parent, name)
+		if want == "" {
+			if err == nil {
+				t.Errorf("newFolderPath(%q) = %q, want refused", name, got)
+			}
+			continue
+		}
+		if err != nil || got != want {
+			t.Errorf("newFolderPath(%q) = %q, %v; want %q", name, got, err, want)
+		}
+	}
+}
+
+// Parents come from where the projects are, most recent first, then home;
+// never the folder home sits in.
+func TestLaunchParents(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	work := filepath.Join(home, "work")
+	got := launchParents([]string{filepath.Join(work, "a"), home, filepath.Join(work, "b"), filepath.Join(home, "c")})
+	if want := []string{work, home}; !slices.Equal(got, want) {
+		t.Errorf("launchParents = %q, want %q", got, want)
+	}
+}
+
+// A new folder whose name is still empty cannot launch, and says why.
+func TestNewFolderNeedsAName(t *testing.T) {
+	f := launchForm{folders: []string{"a"}, folder: 1, parents: []string{t.TempDir()}}
+	if why := launchUnsupported(f); !strings.Contains(why, "name") {
+		t.Errorf("unsupported = %q, want it to ask for a name", why)
+	}
+	f.name = "app"
+	if why := launchUnsupported(f); why != "" {
+		t.Errorf("unsupported = %q with a name", why)
+	}
+}
+
 func TestRenderLaunchFitsItsWidth(t *testing.T) {
 	long := filepath.Join(t.TempDir(), strings.Repeat("deeply-nested-", 12), "project")
 	for _, w := range []int{30, 60, 120} {
 		for _, f := range []launchForm{
 			{folders: []string{long}, field: launchFieldFolder, draft: strings.Repeat("word ", 80)},
 			{folders: nil, mode: 1, agent: 1},
+			{folders: []string{long}, folder: 1, parents: []string{long}, name: strings.Repeat("name-", 20), field: launchFieldName},
 		} {
 			out := renderLaunch(f, w, 20)
 			for _, line := range strings.Split(out, "\n") {

@@ -18,7 +18,7 @@ Every key, by view. The footer shows the ones that fit; this is the whole list.
 | `R` | Replay the session step by step, from wherever the cursor is |
 | `T` | Project tree, marked with what the session changed (works inside a replay too) |
 | `c` | Resume the session beside verbose |
-| `n` | Start a new agent or orchestrator: choose the folder, agent and mode, type a prompt |
+| `n` | Start a new agent or orchestrator: choose the folder (or create one), agent and mode, type a prompt |
 | `f` | Toggle auto-follow (timeline view) |
 | `r` | Refresh session list |
 | `q` / `Ctrl+C` | Quit |

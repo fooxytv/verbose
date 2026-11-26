@@ -40,8 +40,8 @@ back to its own CLI to carry on.
 - Reconstructs **cost** per model from published rates, per session and per
   project
 - Hands any session back to its own CLI to carry on (`c`)
-- **Starts new agents** beside it (`n`): pick the folder, the agent and a
-  prompt, or start Claude Code as an **orchestrator** that splits the work
+- **Starts new agents** beside it (`n`): pick the folder (or create a new
+  one), the agent and a prompt, or start Claude Code as an **orchestrator** that splits the work
   across subagents
 - Follows a **live** session as it is written
 
