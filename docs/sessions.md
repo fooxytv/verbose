@@ -110,6 +110,38 @@ exits. Windows Terminal re-reads the command line it is given, so verbose
 escapes `;` (which would start a second wt command) and quotes (which it would
 drop) for it, and resolves npm shims such as `codex.cmd` to their full path.
 
+### From the command line: `verbose start`
+
+The same launch without the panel, for a script or a service with no terminal
+of its own (pidash's reporter uses it to start agents from orchestrator.home):
+
+```bash
+verbose start -dir ~/src/app "fix the login bug"
+verbose start -dir ~/src/app -worktree -agent codex "try the new parser"
+verbose start -dir ~/src/app -remote-control -title login-fix "fix the login bug"
+```
+
+- `-agent`, `-mode`, `-worktree` and `-worktree-name` are the panel's fields.
+  The folder must already exist; `verbose start` never creates one.
+- `-remote-control` (Claude Code only) starts it with `--remote-control
+  <title>`, so claude.ai and the Claude app can reach it. It needs a Claude
+  login with a subscription; on API billing the session starts without it.
+- `-title` names the session; left out, it is the folder and the time (or the
+  worktree's name).
+- It opens in a **new Windows Terminal tab** on Windows, a **Terminal.app**
+  window on a Mac, and a **detached tmux session** anywhere else, whatever
+  terminal verbose itself is in; `-in wt|tmux|terminal` picks one. The tmux
+  session is named after the title (`tmux attach -t <title>`), runs the agent
+  through your login shell so it has your `PATH`, and is checked a moment
+  later: an agent that exits at once is reported as a failure.
+- Run from inside a Claude Code session, it clears the markers Claude Code puts
+  on everything it runs (`CLAUDE_CODE_CHILD_SESSION` and the rest). Otherwise
+  the new session takes itself for a child of that one and saves no transcript.
+- A folder Claude Code has not been told to trust stops at the trust question,
+  which nobody may be there to answer. Trusting a parent folder once (run
+  `claude` there and say yes) covers every folder under it, worktrees
+  included.
+
 ## After renaming or moving a folder
 
 A transcript records the folder it ran in by its full path, so renaming the

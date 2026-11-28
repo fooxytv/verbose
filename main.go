@@ -38,6 +38,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "secrets" {
 		os.Exit(runSecrets(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "start" {
+		os.Exit(ui.RunStart(os.Args[2:], os.Stdout, os.Stderr))
+	}
 
 	project := flag.String("project", "", "filter to a specific project name")
 	opencode := flag.String("opencode", "", "path to an OpenCode database (defaults to ~/.local/share/opencode/opencode.db)")

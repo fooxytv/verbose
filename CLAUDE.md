@@ -735,6 +735,26 @@ shared with `c`, so a change to where "beside" is changes both.
 - Orchestrator mode is Claude Code only; the panel refuses the others rather
   than launching a plain agent the user did not ask for.
 
+`verbose start` (`internal/ui/start.go`) is the panel without the panel.
+
+- **It cannot use `launchInTerminal`.** That picks a terminal from the one
+  verbose runs in (`TMUX`, `WT_SESSION`, ...); a service has none and would
+  fall through to running in place. The target comes from the OS instead.
+- **Claude Code's session markers must be cleared.** Started from inside a
+  session, the new one inherited `CLAUDE_CODE_CHILD_SESSION`, printed
+  "Transcript saving is off" and wrote no session record — invisible to
+  verbose and pidash. `parentSessionVars` lists only the markers, never a
+  `CLAUDE_CODE_` setting someone chose.
+- **`--remote-control` always gets a name**, like `--worktree`: its value is
+  optional and would swallow the prompt. It needs a subscription login; on API
+  billing the session starts with no bridge (verified on mint-vm, 2.1.316).
+- **tmux runs `$SHELL -lc 'exec "$0" "$@"'`** so a service's PATH is not the
+  agent's, and the prompt is an argument, never shell text. tmux names may not
+  hold `.` or `:`, hence `startName`. A `has-session` check 1.5s later is the
+  only way to see a CLI that exited at once.
+- A child of a trusted folder is trusted (verified on 2.1.316: a new empty
+  folder in a trusted repo opened with no trust question).
+
 ## Testing
 
 - `go test ./...` should stay under ~20s. The replay smoke sweep strides
