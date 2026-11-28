@@ -81,6 +81,15 @@ tab (or ↑/↓) moves between the fields, ←/→ changes one:
   (or uses it, if it already exists) and starts the agent in it. The panel opens
   on a new folder when the session under the cursor ran in your home folder,
   or when verbose has seen no folders yet, rather than starting in home.
+- **Worktree** (only for a folder in a git repository): *off* runs in the
+  folder itself; *new worktree* gives the agent a git worktree of its own, so
+  two agents in one repository do not edit the same files. Its **Name** is
+  optional; left blank it is the agent and the time (`codex-1128-1432`). Claude
+  Code makes the worktree itself (`claude --worktree <name>`); for the other
+  agents verbose runs `git worktree add` on a new branch `worktree-<name>`.
+  Either way it lands in `<repo>/.claude/worktrees/<name>`, and one already
+  there is reused. Add `.claude/worktrees/` to the repository's `.gitignore`,
+  or the main checkout lists them as untracked.
 - **Agent**: claude, codex, opencode, copilot or pi.
 - **Mode**: *agent* runs the prompt as typed. *orchestrator* (Claude Code
   only) adds a brief to the system prompt, through

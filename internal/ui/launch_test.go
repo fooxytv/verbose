@@ -2,10 +2,12 @@ package ui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -34,7 +36,7 @@ func TestLaunchArgsPerAgent(t *testing.T) {
 		{"copilot", "agent", "", "copilot", nil},
 	}
 	for _, c := range cases {
-		cli, args := launchArgs(c.agent, c.mode, c.prompt, "brief.md")
+		cli, args := launchArgs(c.agent, c.mode, c.prompt, "brief.md", "")
 		if cli != c.cli || !slices.Equal(args, c.args) {
 			t.Errorf("launchArgs(%q, %q, %q) = %q %q, want %q %q",
 				c.agent, c.mode, c.prompt, cli, args, c.cli, c.args)
@@ -253,6 +255,115 @@ func TestNewFolderNeedsAName(t *testing.T) {
 	}
 }
 
+// Claude Code makes its own worktree, and is always given a name for it: a
+// bare --worktree takes an optional value, so it would swallow the prompt.
+func TestLaunchArgsWorktree(t *testing.T) {
+	cli, args := launchArgs("claude", "agent", "fix it", "brief.md", "w1")
+	if want := []string{"--worktree", "w1", "fix it"}; cli != "claude" || !slices.Equal(args, want) {
+		t.Errorf("claude = %q, want %q", args, want)
+	}
+	cli, args = launchArgs("claude", "orchestrator", "", "brief.md", "w1")
+	if want := []string{"--worktree", "w1", "--append-system-prompt-file", "brief.md"}; !slices.Equal(args, want) {
+		t.Errorf("claude orchestrator = %q, want %q", args, want)
+	}
+	// The others are started inside a worktree verbose made, so nothing changes
+	// on their command line.
+	if _, args = launchArgs("codex", "agent", "fix it", "brief.md", "w1"); !slices.Equal(args, []string{"fix it"}) {
+		t.Errorf("codex = %q", args)
+	}
+}
+
+func TestWorktreeName(t *testing.T) {
+	now := time.Date(2026, 11, 28, 14, 32, 0, 0, time.UTC)
+	if got, err := worktreeName("  ", "codex", now); err != nil || got != "codex-1128-1432" {
+		t.Errorf("blank = %q, %v", got, err)
+	}
+	if got, err := worktreeName(" login-fix ", "claude", now); err != nil || got != "login-fix" {
+		t.Errorf("typed = %q, %v", got, err)
+	}
+	for _, bad := range []string{"a b", "../x", "x/y", "-x", ".x", "x..y", "x.lock", strings.Repeat("n", 65)} {
+		if _, err := worktreeName(bad, "claude", now); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}
+
+func TestGitRoot(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if gitRoot(sub) != "" && gitRoot(root) == gitRoot(sub) {
+		t.Skip("the temp folder is inside a git repository")
+	}
+	// A worktree's .git is a file, a clone's a folder: both count.
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRoot(sub); got != root {
+		t.Errorf("gitRoot = %q, want %q", got, root)
+	}
+}
+
+// The Worktree field is only offered for a folder in a repository, and its
+// name only once it is on.
+func TestWorktreeFields(t *testing.T) {
+	f := launchForm{folders: []string{"a", "b"}, repos: []string{"", "/r"}}
+	if slices.Contains(f.fields(), launchFieldWorktree) {
+		t.Error("offered a worktree outside a repository")
+	}
+	f.folder = 1
+	if !slices.Contains(f.fields(), launchFieldWorktree) || slices.Contains(f.fields(), launchFieldTree) {
+		t.Errorf("fields = %v", f.fields())
+	}
+	f.tree = 1
+	if !slices.Contains(f.fields(), launchFieldTree) || !f.useWorktree() {
+		t.Errorf("fields with a worktree = %v", f.fields())
+	}
+	f.treeName = "a b"
+	if why := launchUnsupported(f); !strings.Contains(why, "worktree name") {
+		t.Errorf("unsupported = %q", why)
+	}
+	// A new folder is never a worktree, whatever was chosen before.
+	f.folder = 2
+	if f.useWorktree() {
+		t.Error("a new folder used a worktree")
+	}
+}
+
+func TestAddWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "first")
+
+	path, err := addWorktree(root, "codex-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != worktreePath(root, "codex-1") || gitRoot(path) != path {
+		t.Errorf("worktree at %q, root %q", path, gitRoot(path))
+	}
+	// Started from inside a worktree, the next goes beside it, not inside.
+	if got, want := worktreePath(path, "codex-2"), worktreePath(root, "codex-2"); got != want {
+		t.Errorf("from a worktree: %q, want %q", got, want)
+	}
+	// Asking again starts in the same one rather than failing on the branch.
+	if again, err := addWorktree(root, "codex-1"); err != nil || again != path {
+		t.Errorf("second add = %q, %v", again, err)
+	}
+}
+
 func TestRenderLaunchFitsItsWidth(t *testing.T) {
 	long := filepath.Join(t.TempDir(), strings.Repeat("deeply-nested-", 12), "project")
 	for _, w := range []int{30, 60, 120} {
@@ -260,6 +371,8 @@ func TestRenderLaunchFitsItsWidth(t *testing.T) {
 			{folders: []string{long}, field: launchFieldFolder, draft: strings.Repeat("word ", 80)},
 			{folders: nil, mode: 1, agent: 1},
 			{folders: []string{long}, folder: 1, parents: []string{long}, name: strings.Repeat("name-", 20), field: launchFieldName},
+			{folders: []string{long}, repos: []string{long}, tree: 1, field: launchFieldTree},
+			{folders: []string{long}, repos: []string{long}, tree: 1, treeName: strings.Repeat("n", 64), field: launchFieldTree},
 		} {
 			out := renderLaunch(f, w, 20)
 			for _, line := range strings.Split(out, "\n") {

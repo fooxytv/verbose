@@ -3,8 +3,11 @@ package ui
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/fooxytv/verbose/pkg/session"
 
@@ -26,12 +29,19 @@ var launchAgents = []string{"claude", "codex", "opencode", "copilot", "pi"}
 // hands it to subagents. Only Claude Code can be told to be an orchestrator.
 var launchModes = []string{"agent", "orchestrator"}
 
+// launchWorktree: run in the folder itself, or in a git worktree of its own,
+// so two agents in one repository do not edit the same files.
+var launchWorktree = []string{"off", "new worktree"}
+
 // The panel's fields, in the order tab moves through them. Under and Name are
-// only there while the folder is a new one (see fields).
+// only there while the folder is a new one, Worktree only for a folder in a
+// git repository, and Tree only while Worktree is on (see fields).
 const (
 	launchFieldFolder = iota
 	launchFieldUnder
 	launchFieldName
+	launchFieldWorktree
+	launchFieldTree
 	launchFieldAgent
 	launchFieldMode
 	launchFieldPrompt
@@ -52,15 +62,18 @@ const orchestratorBrief = `You are running as an orchestrator. Your job is to ge
 
 // launchForm is the panel's state.
 type launchForm struct {
-	folders []string // most recently used first
-	folder  int      // len(folders) is "+ new folder"
-	parents []string // where a new folder can go, for the Under field
-	parent  int
-	name    string // the new folder's name
-	agent   int
-	mode    int
-	field   int
-	draft   string
+	folders  []string // most recently used first
+	folder   int      // len(folders) is "+ new folder"
+	parents  []string // where a new folder can go, for the Under field
+	parent   int
+	name     string   // the new folder's name
+	repos    []string // each folder's git repository root, "" for none
+	tree     int      // index into launchWorktree
+	treeName string   // the worktree's name, typed; empty picks one
+	agent    int
+	mode     int
+	field    int
+	draft    string
 }
 
 func (f launchForm) agentName() string { return launchAgents[f.agent] }
@@ -69,12 +82,84 @@ func (f launchForm) modeName() string  { return launchModes[f.mode] }
 // newFolder is true when the panel is creating a folder rather than picking one.
 func (f launchForm) newFolder() bool { return f.folder >= len(f.folders) }
 
+// repoRoot is the git repository the chosen folder is in, or "".
+func (f launchForm) repoRoot() string {
+	if f.newFolder() || f.folder >= len(f.repos) {
+		return ""
+	}
+	return f.repos[f.folder]
+}
+
+// useWorktree is true when the agent will get a worktree of its own.
+func (f launchForm) useWorktree() bool { return f.repoRoot() != "" && f.tree == 1 }
+
 // fields lists the fields tab moves through, in order.
 func (f launchForm) fields() []int {
-	if f.newFolder() {
-		return []int{launchFieldFolder, launchFieldUnder, launchFieldName, launchFieldAgent, launchFieldMode, launchFieldPrompt}
+	out := []int{launchFieldFolder}
+	switch {
+	case f.newFolder():
+		out = append(out, launchFieldUnder, launchFieldName)
+	case f.repoRoot() != "":
+		out = append(out, launchFieldWorktree)
+		if f.useWorktree() {
+			out = append(out, launchFieldTree)
+		}
 	}
-	return []int{launchFieldFolder, launchFieldAgent, launchFieldMode, launchFieldPrompt}
+	return append(out, launchFieldAgent, launchFieldMode, launchFieldPrompt)
+}
+
+// gitRoot is the repository dir is in: the nearest folder at or above it with
+// a .git, which is a folder in a clone and a file in a worktree. "" for none.
+func gitRoot(dir string) string {
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		if filepath.Dir(d) == d {
+			return ""
+		}
+	}
+}
+
+var worktreeNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// worktreeName is the typed name, or one made from the agent and the time.
+// It becomes a folder and a branch name, so it is kept to the characters both
+// accept everywhere.
+func worktreeName(typed, agent string, now time.Time) (string, error) {
+	name := strings.TrimSpace(typed)
+	if name == "" {
+		return agent + "-" + now.Format("0102-1504"), nil
+	}
+	if !worktreeNameRE.MatchString(name) || strings.Contains(name, "..") || strings.HasSuffix(name, ".lock") {
+		return "", fmt.Errorf("A worktree name can use letters, digits, \".\", \"_\" and \"-\".")
+	}
+	return name, nil
+}
+
+// worktreePath is where a worktree goes: beside Claude Code's own, so every
+// agent's worktrees are in one place whichever agent made them. Started from
+// a session that ran in a worktree, the new one goes beside it, not inside.
+func worktreePath(root, name string) string {
+	sep := string(filepath.Separator)
+	if i := strings.Index(root+sep, sep+filepath.Join(".claude", "worktrees")+sep); i >= 0 {
+		root = root[:i]
+	}
+	return filepath.Join(root, ".claude", "worktrees", name)
+}
+
+// addWorktree makes the worktree for an agent that cannot make its own, on a
+// new branch from the current one. One already there is reused.
+func addWorktree(root, name string) (string, error) {
+	path := worktreePath(root, name)
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return path, nil
+	}
+	out, err := exec.Command("git", "-C", root, "worktree", "add", "-b", "worktree-"+name, path).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return path, nil
 }
 
 func (f launchForm) parentPath() string {
@@ -167,7 +252,11 @@ func launchFolders(sessions []session.SessionInfo) []string {
 // The orchestrator brief goes in by file (briefPath), not as an argument: it is
 // several lines long, and a newline survives neither tmux send-keys (it is a
 // keypress) nor wt's re-quoting of its command line.
-func launchArgs(agent, mode, prompt, briefPath string) (cli string, args []string) {
+//
+// worktree is only used by Claude Code, which makes its own (--worktree); the
+// other agents are started inside one verbose has made (addWorktree). It is
+// always a name, because a bare --worktree would take the prompt for one.
+func launchArgs(agent, mode, prompt, briefPath, worktree string) (cli string, args []string) {
 	prompt = strings.TrimSpace(prompt)
 	if len([]rune(prompt)) > continueMaxReply {
 		prompt = string([]rune(prompt)[:continueMaxReply])
@@ -190,6 +279,9 @@ func launchArgs(agent, mode, prompt, briefPath string) (cli string, args []strin
 		}
 		return agent, args
 	}
+	if worktree != "" {
+		args = append(args, "--worktree", worktree)
+	}
 	if mode == "orchestrator" {
 		args = append(args, "--append-system-prompt-file", briefPath)
 	}
@@ -206,6 +298,9 @@ func launchArgs(agent, mode, prompt, briefPath string) (cli string, args []strin
 func (m *Model) openLaunch(current *session.SessionInfo) {
 	folders := launchFolders(m.store.GetSessions())
 	f := launchForm{folders: folders, parents: launchParents(folders), field: launchFieldPrompt}
+	for _, d := range folders {
+		f.repos = append(f.repos, gitRoot(d))
+	}
 	home, _ := os.UserHomeDir()
 	if current != nil {
 		for i, d := range f.folders {
@@ -236,6 +331,11 @@ func (m *Model) closeLaunch() {
 func launchUnsupported(f launchForm) string {
 	if _, err := f.folderPath(); err != nil {
 		return err.Error()
+	}
+	if f.useWorktree() {
+		if _, err := worktreeName(f.treeName, f.agentName(), time.Now()); err != nil {
+			return err.Error()
+		}
 	}
 	if f.modeName() == "orchestrator" && f.agentName() != "claude" {
 		return "Only Claude Code can run as an orchestrator. Choose claude, or the agent mode."
@@ -275,6 +375,21 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 				created = true
 			}
 		}
+		tree, where := "", ""
+		if f.useWorktree() {
+			name, _ := worktreeName(f.treeName, f.agentName(), time.Now())
+			if f.agentName() == "claude" {
+				tree = name
+			} else {
+				path, err := addWorktree(f.repoRoot(), name)
+				if err != nil {
+					m.fail("Could not make the worktree: " + err.Error())
+					return m, clearStatusAfter()
+				}
+				cwd = path
+			}
+			where = " (worktree " + name + ")"
+		}
 		brief := ""
 		label := f.agentName()
 		if f.modeName() == "orchestrator" {
@@ -285,9 +400,9 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 				return m, clearStatusAfter()
 			}
 		}
-		cli, args := launchArgs(f.agentName(), f.modeName(), f.draft, brief)
+		cli, args := launchArgs(f.agentName(), f.modeName(), f.draft, brief, tree)
 		m.closeLaunch()
-		m.statusMsg = "Starting " + label + " in " + filepath.Base(cwd) + "…"
+		m.statusMsg = "Starting " + label + " in " + filepath.Base(cwd) + where + "…"
 		if created {
 			m.statusMsg = "Created " + cwd + " · starting " + label + "…"
 		}
@@ -296,6 +411,10 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 
 	if f.field == launchFieldName {
 		f.name = editText(f.name, msg, key, 255)
+		return m, nil
+	}
+	if f.field == launchFieldTree {
+		f.treeName = editText(f.treeName, msg, key, 64)
 		return m, nil
 	}
 	if f.field != launchFieldPrompt {
@@ -315,6 +434,8 @@ func (m Model) handleLaunchKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 				f.folder = cycle(f.folder, step, len(f.folders)+1)
 			case launchFieldUnder:
 				f.parent = cycle(f.parent, step, len(f.parents))
+			case launchFieldWorktree:
+				f.tree = cycle(f.tree, step, len(launchWorktree))
 			case launchFieldAgent:
 				f.agent = cycle(f.agent, step, len(launchAgents))
 			case launchFieldMode:
@@ -407,25 +528,43 @@ func renderLaunch(f launchForm, width, height int) string {
 	if !f.newFolder() {
 		folder = shortenMiddle(f.folders[f.folder], max(10, width-30))
 	}
+	text := func(field int, label, value, hint string) {
+		marker := "  "
+		v := mutedStyle.Render(hint)
+		if value != "" {
+			v = textStyle.Render(value)
+		}
+		if f.field == field {
+			marker = searchPromptStyle.Render("▐") + " "
+			v = selectedStyle.Render(" "+value+"▌ ") + " " + mutedStyle.Render(hint)
+			if value != "" {
+				v = selectedStyle.Render(" " + value + "▌ ")
+			}
+		}
+		b.WriteString(clampWidth(marker+headerLabelStyle.Render(padRight(label, 8))+" "+v, width) + "\n")
+	}
+	where := func(path, verb string) {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			verb = "already exists, starts in "
+		}
+		b.WriteString(clampWidth("           "+mutedStyle.Render(verb+shortenMiddle(path, max(10, width-40))), width) + "\n")
+	}
+
 	choice(launchFieldFolder, "Folder", folder, f.folder, len(f.folders)+1)
 	if f.newFolder() {
 		choice(launchFieldUnder, "Under", shortenMiddle(f.parentPath(), max(10, width-30)), f.parent, len(f.parents))
-		marker := "  "
-		name := mutedStyle.Render("type a name")
-		if f.name != "" {
-			name = textStyle.Render(f.name)
-		}
-		if f.field == launchFieldName {
-			marker = searchPromptStyle.Render("▐") + " "
-			name = selectedStyle.Render(" " + f.name + "▌ ")
-		}
-		b.WriteString(clampWidth(marker+headerLabelStyle.Render(padRight("Name", 8))+" "+name, width) + "\n")
+		text(launchFieldName, "Name", f.name, "type a name")
 		if path, err := f.folderPath(); err == nil {
-			what := "creates "
-			if info, err := os.Stat(path); err == nil && info.IsDir() {
-				what = "already exists, starts in "
+			where(path, "creates ")
+		}
+	} else if root := f.repoRoot(); root != "" {
+		choice(launchFieldWorktree, "Worktree", launchWorktree[f.tree], f.tree, len(launchWorktree))
+		if f.useWorktree() {
+			auto, _ := worktreeName("", f.agentName(), time.Now())
+			text(launchFieldTree, "Name", f.treeName, "blank for "+auto)
+			if name, err := worktreeName(f.treeName, f.agentName(), time.Now()); err == nil {
+				where(worktreePath(root, name), "creates ")
 			}
-			b.WriteString(clampWidth("           "+mutedStyle.Render(what+shortenMiddle(path, max(10, width-40))), width) + "\n")
 		}
 	}
 	choice(launchFieldAgent, "Agent", f.agentName(), f.agent, len(launchAgents))
