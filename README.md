@@ -41,8 +41,8 @@ back to its own CLI to carry on.
   project
 - Hands any session back to its own CLI to carry on (`c`)
 - **Starts new agents** beside it (`n`): pick the folder (or create a new
-  one), the agent and a prompt, or start Claude Code as an **orchestrator** that splits the work
-  across subagents
+  one), the agent and a prompt, optionally in a **git worktree** of its own, or
+  start Claude Code as an **orchestrator** that splits the work across subagents
 - Follows a **live** session as it is written
 
 ## Documentation
