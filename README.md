@@ -230,6 +230,7 @@ verbose --redact              # mask credentials on screen, for sharing it
 verbose find "docker run"     # which session ran it, and which step
 verbose secrets               # what to revoke, by fingerprint
 verbose relink                # repoint a renamed project folder
+verbose start -dir ~/src/app "fix the bug"   # start an agent in a window of its own
 verbose -json sessions        # machine-readable output
 verbose --version
 ```
